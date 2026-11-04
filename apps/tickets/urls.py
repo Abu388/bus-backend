@@ -5,7 +5,7 @@ urlpatterns = [
     # GET /tickets/ (Passenger ticket history)
     path('tickets/', views.TicketListView.as_view(), name='ticket-list'),
 
-    # POST /tickets/validate/ (Cashier validates a ticket token)
+    # POST /tickets/validate/ (Casher validates a ticket token)
     path('tickets/validate/', views.TicketValidateView.as_view(), name='ticket-validate'),
 
     # GET /tickets/<id>/ (Single ticket detail)

@@ -65,7 +65,7 @@ def annotate_trip_financials(queryset):
 
 
 # ============================================================================
-# 1. BUS MAINTENANCE START (Cashier/Admin) & HISTORY (Admin)
+# 1. BUS MAINTENANCE START (Casher/Admin) & HISTORY (Admin)
 #    Endpoints: POST /buses/<uuid:pk>/maintenance/  |  GET /buses/<uuid:pk>/maintenance/
 # ============================================================================
 class BusMaintenanceView(APIView):
@@ -93,7 +93,7 @@ class BusMaintenanceView(APIView):
 
     @extend_schema(
         tags=['Fleet - Maintenance'],
-        summary='Send a bus into maintenance (Cashier / Admin)',
+        summary='Send a bus into maintenance (Casher / Admin)',
         description=(
             'Requires a reason. Rejected if the bus has an active trip or an open maintenance event. '
             'Sets bus status to maintenance, creates MaintenanceEvent, and writes an AuditLog row.'

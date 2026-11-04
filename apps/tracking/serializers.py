@@ -5,7 +5,7 @@ from apps.tracking.models import BusLiveState, BusLocation
 
 class LocationPingInputSerializer(serializers.Serializer):
     """
-    Validates incoming GPS pings from the cashier's phone (POST /buses/{id}/location).
+    Validates incoming GPS pings from the casher's phone (POST /buses/{id}/location).
     Because this inherits from serializers.Serializer (not ModelSerializer),
     we declare each field directly with its exact min/max validation rules instead of using class Meta.
     """

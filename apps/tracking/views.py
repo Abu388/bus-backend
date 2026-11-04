@@ -80,7 +80,7 @@ class BusSearchByNumberView(generics.ListAPIView):
 
 
 # ============================================================================
-# 3. GET LAST BUS LOCATION (Any Logged-In User) & POST GPS PING (Cashier)
+# 3. GET LAST BUS LOCATION (Any Logged-In User) & POST GPS PING (Casher)
 #    Endpoints: GET /buses/<uuid:pk>/location/  |  POST /buses/<uuid:pk>/location/
 # ============================================================================
 class BusLocationView(APIView):
@@ -103,7 +103,7 @@ class BusLocationView(APIView):
 
     @extend_schema(
         tags=['Tracking'],
-        summary='Send GPS ping from Cashier phone',
+        summary='Send GPS ping from Casher phone',
         description='Records GPS ping in history and updates live bus state if newer than existing state.',
         request=LocationPingInputSerializer,
         responses={200: OpenApiTypes.OBJECT},
@@ -126,9 +126,9 @@ class BusLocationView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # 3. Ensure the caller is the cashier who owns this active trip
+        # 3. Ensure the caller is the casher who owns this active trip
         if active_trip.casher != request.user:
-            raise PermissionDenied("Only the cashier of the active trip can send location pings.")
+            raise PermissionDenied("Only the casher of the active trip can send location pings.")
 
         now = timezone.now()
 

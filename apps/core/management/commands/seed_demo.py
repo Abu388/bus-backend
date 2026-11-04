@@ -2,6 +2,7 @@ from decimal import Decimal
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand
 from django.db import models, transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.fares.models import Fare
@@ -24,43 +25,50 @@ class Command(BaseCommand):
 
         # 1. Create Demo Users
         user_fields = get_model_fields(User)
-        username_field = User.USERNAME_FIELD
 
         def upsert_user(username, email, phone, role, password="Password123!", is_staff=False, is_superuser=False):
-            if username_field == "email":
-                lookup = {"email": email}
-            elif "phone" in username_field:
-                lookup = {username_field: phone}
+            # Find any existing user matching phone, email, or username so re-seeding never collides
+            query = Q()
+            if "phone" in user_fields:
+                query |= Q(phone=phone)
+            if "phone_number" in user_fields:
+                query |= Q(phone_number=phone)
+            if "email" in user_fields:
+                query |= Q(email=email)
+            if "username" in user_fields:
+                query |= Q(username=username)
+
+            user = User.objects.filter(query).first()
+
+            defaults = {
+                "username": username,
+                "email": email,
+                "phone": phone,
+                "phone_number": phone,
+                "full_name": username.replace("_", " ").title(),
+                "first_name": username.capitalize(),
+                "last_name": "Demo",
+                "role": role,
+                "is_staff": is_staff,
+                "is_superuser": is_superuser,
+            }
+
+            if user:
+                for k, v in defaults.items():
+                    if k in user_fields:
+                        setattr(user, k, v)
             else:
-                lookup = {username_field: username}
+                user = User(**{k: v for k, v in defaults.items() if k in user_fields})
 
-            defaults = {}
-            for k, v in [
-                ("role", role),
-                ("is_staff", is_staff),
-                ("is_superuser", is_superuser),
-                ("email", email),
-                ("username", username),
-                ("phone_number", phone),
-                ("phone", phone),
-                ("full_name", username.replace("_", " ").title()),
-                ("first_name", username.capitalize()),
-                ("last_name", "Demo"),
-            ]:
-                if k in user_fields:
-                    defaults[k] = v
-
-            user, created = User.objects.update_or_create(**lookup, defaults=defaults)
-            if created:
-                user.set_password(password)
-                user.save()
+            user.set_password(password)
+            user.save()
             return user
 
         admin_user = upsert_user(
             "admin_demo", "admin@bus.et", "+251911000001", "admin", is_staff=True, is_superuser=True
         )
-        upsert_user("cashier1", "cashier1@bus.et", "+251911000002", "cashier")
-        upsert_user("cashier2", "cashier2@bus.et", "+251911000003", "cashier")
+        upsert_user("cashier1", "cashier1@bus.et", "+251911000002", "casher")
+        upsert_user("cashier2", "cashier2@bus.et", "+251911000003", "casher")
         upsert_user("passenger1", "passenger1@bus.et", "+251911000004", "passenger")
 
         # 2. Create Addis Ababa Fermatas
@@ -101,7 +109,11 @@ class Command(BaseCommand):
 
         # 4. Link Ordered RouteStops
         rs_fields = get_model_fields(RouteStop)
-        seq_field = "sequence_number" if "sequence_number" in rs_fields else ("order" if "order" in rs_fields else "sequence")
+        seq_field = (
+            "sequence_number"
+            if "sequence_number" in rs_fields
+            else ("order" if "order" in rs_fields else "sequence")
+        )
         for idx, fermata in enumerate(fermatas, start=1):
             RouteStop.objects.update_or_create(
                 route=route,
@@ -135,7 +147,6 @@ class Command(BaseCommand):
             }
             if "effective_from" in fare_fields:
                 fare_kwargs["effective_from"] = timezone.now()
-            # Automatically populate any ForeignKey pointing to CustomUser (like configured_by or created_by)
             for f in Fare._meta.concrete_fields:
                 if isinstance(f, models.ForeignKey) and f.related_model == User:
                     fare_kwargs[f.name] = admin_user
@@ -158,9 +169,9 @@ class Command(BaseCommand):
         self.stdout.write(
             self.style.SUCCESS(
                 "Seed complete! Demo accounts created (Password: Password123!):\n"
-                "  - Admin:     admin_demo / admin@bus.et / +251911000001\n"
-                "  - Cashier 1: cashier1   / cashier1@bus.et / +251911000002\n"
-                "  - Cashier 2: cashier2   / cashier2@bus.et / +251911000003\n"
-                "  - Passenger: passenger1 / passenger1@bus.et / +251911000004"
+                "  - Admin:     admin_demo / admin@bus.et / +251911000001 (role: admin)\n"
+                "  - Cashier 1: cashier1   / cashier1@bus.et / +251911000002 (role: casher)\n"
+                "  - Cashier 2: cashier2   / cashier2@bus.et / +251911000003 (role: casher)\n"
+                "  - Passenger: passenger1 / passenger1@bus.et / +251911000004 (role: passenger)"
             )
         )

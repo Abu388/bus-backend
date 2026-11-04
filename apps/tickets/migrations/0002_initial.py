@@ -23,7 +23,7 @@ class Migration(migrations.Migration):
         ),
         migrations.AddField(
             model_name='ticketscan',
-            name='cashier',
+            name='casher',
             field=models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='ticket_scans', to=settings.AUTH_USER_MODEL),
         ),
         migrations.AddField(

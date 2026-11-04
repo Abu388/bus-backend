@@ -89,7 +89,7 @@ class TicketRotatingCodeView(APIView):
 
     @extend_schema(
         tags=['Tickets'],
-        summary='Get a fresh 60-second rotating signed code for cashier scanning',
+        summary='Get a fresh 60-second rotating signed code for casher scanning',
         responses={200: OpenApiTypes.OBJECT},
     )
     def get(self, request, pk):
@@ -106,7 +106,7 @@ class TicketRotatingCodeView(APIView):
 
 
 # ============================================================================
-# 4. VALIDATE A TICKET (Cashier / Admin)
+# 4. VALIDATE A TICKET (Casher / Admin)
 #    Endpoint: POST /tickets/validate/
 # ============================================================================
 class TicketValidateView(APIView):
@@ -117,10 +117,10 @@ class TicketValidateView(APIView):
 
     @extend_schema(
         tags=['Tickets'],
-        summary='Validate a passenger ticket code (Cashier)',
+        summary='Validate a passenger ticket code (Casher)',
         description=(
             'Verifies the rotating signed token, checks that the ticket belongs to the '
-            'cashier’s active trip, checks computed status, and logs a TicketScan row.'
+            'casher’s active trip, checks computed status, and logs a TicketScan row.'
         ),
         request=TicketValidateInputSerializer,
         responses={200: OpenApiTypes.OBJECT},
@@ -131,7 +131,7 @@ class TicketValidateView(APIView):
         raw_token = serializer.validated_data['token'].strip()
         now = timezone.now()
 
-        # Find the cashier's currently active trip (if any)
+        # Find the casher's currently active trip (if any)
         active_trip = Trip.objects.filter(
             casher=request.user, status=Trip.Status.ACTIVE
         ).first()
@@ -151,7 +151,7 @@ class TicketValidateView(APIView):
         if not ticket:
             TicketScan.objects.create(
                 ticket=None,
-                cashier=request.user,
+                casher=request.user,
                 trip=active_trip,
                 result=TicketScan.Result.INVALID,
                 scanned_at=now,
@@ -166,11 +166,11 @@ class TicketValidateView(APIView):
                 status=status.HTTP_200_OK,
             )
 
-        #    (b) Ticket belongs to the cashier's current active trip -> else 'wrong_trip'
+        #    (b) Ticket belongs to the casher's current active trip -> else 'wrong_trip'
         if not active_trip or ticket.trip_id != active_trip.id:
             TicketScan.objects.create(
                 ticket=ticket,
-                cashier=request.user,
+                casher=request.user,
                 trip=active_trip,
                 result=TicketScan.Result.WRONG_TRIP,
                 scanned_at=now,
@@ -195,7 +195,7 @@ class TicketValidateView(APIView):
 
         TicketScan.objects.create(
             ticket=ticket,
-            cashier=request.user,
+            casher=request.user,
             trip=active_trip,
             result=scan_result,
             scanned_at=now,

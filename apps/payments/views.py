@@ -25,7 +25,7 @@ from apps.core.permissions import IsCasherRole
 from apps.fares.models import Fare
 from apps.payments.models import Payment, ProviderEvent
 from apps.payments.serializers import (
-    CashierTripPaymentSerializer,
+    CasherTripPaymentSerializer,
     PaymentInitiateSerializer,
     PaymentSerializer,
 )
@@ -352,15 +352,15 @@ class PaymentWebhookView(APIView):
 
 
 # ============================================================================
-# 4. CASHIER TRIP PAYMENTS DASHBOARD
+# 4. CASHER TRIP PAYMENTS DASHBOARD
 #    Endpoint: GET /trips/<uuid:pk>/payments/
 # ============================================================================
-class TripPaymentsCashierView(APIView):
+class TripPaymentsCasherView(APIView):
     permission_classes = [IsCasherRole]
 
     @extend_schema(
         tags=['Payments'],
-        summary='Get succeeded payments and total collected for a trip (Cashier / Admin)',
+        summary='Get succeeded payments and total collected for a trip (Casher / Admin)',
         description=(
             'Returns all succeeded payments for a trip with masked passenger names, '
             'plus the total amount collected computed via a database aggregate.'
@@ -370,8 +370,8 @@ class TripPaymentsCashierView(APIView):
     def get(self, request, pk):
         trip = get_object_or_404(Trip, pk=pk)
 
-        # Only that trip's cashier or an admin can inspect the trip's payments
-        if getattr(request.user, 'role', None) == 'cashier' and trip.casher != request.user:
+        # Only that trip's casher or an admin can inspect the trip's payments
+        if getattr(request.user, 'role', None) == 'casher' and trip.casher != request.user:
             raise PermissionDenied("You can only view payments for your own trip.")
 
         # Filter strictly to succeeded payments for this trip
@@ -391,7 +391,7 @@ class TripPaymentsCashierView(APIView):
                 "trip_number": trip.number,
                 "succeeded_count": succeeded_qs.count(),
                 "total_collected": str(total_collected),
-                "payments": CashierTripPaymentSerializer(succeeded_qs, many=True).data,
+                "payments": CasherTripPaymentSerializer(succeeded_qs, many=True).data,
             },
             status=status.HTTP_200_OK,
         )

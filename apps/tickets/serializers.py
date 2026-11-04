@@ -36,7 +36,7 @@ class TicketSerializer(serializers.ModelSerializer):
 class TicketValidateInputSerializer(serializers.Serializer):
     """
     Validates input for POST /tickets/validate.
-    The cashier sends the rotating signed token (or short ticket code).
+    The casher sends the rotating signed token (or short ticket code).
     """
     token = serializers.CharField(max_length=512)
 
@@ -47,7 +47,7 @@ class TicketScanSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'ticket',
-            'cashier',
+            'casher',
             'trip',
             'result',
             'scanned_at',

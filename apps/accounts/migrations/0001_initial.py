@@ -32,7 +32,7 @@ class Migration(migrations.Migration):
                 ('email', models.EmailField(max_length=254, unique=True)),
                 ('phone', models.CharField(max_length=20, unique=True)),
                 ('full_name', models.CharField(max_length=255)),
-                ('role', models.CharField(choices=[('passenger', 'Passenger'), ('cashier', 'Cashier'), ('admin', 'Admin')], default='passenger', max_length=50)),
+                ('role', models.CharField(choices=[('passenger', 'Passenger'), ('casher', 'Casher'), ('admin', 'Admin')], default='passenger', max_length=50)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
                 ('updated_at', models.DateTimeField(auto_now=True)),
                 ('groups', models.ManyToManyField(blank=True, help_text='The groups this user belongs to. A user will get all permissions granted to each of their groups.', related_name='user_set', related_query_name='user', to='auth.group', verbose_name='groups')),

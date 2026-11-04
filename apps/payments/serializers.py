@@ -41,9 +41,9 @@ class PaymentSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-class CashierTripPaymentSerializer(serializers.ModelSerializer):
+class CasherTripPaymentSerializer(serializers.ModelSerializer):
     """
-    Masked payment summary for GET /trips/{id}/payments (Cashier dashboard).
+    Masked payment summary for GET /trips/{id}/payments (Casher dashboard).
     Shows only succeeded payment details and masks the passenger's identity.
     """
     passenger_masked = serializers.SerializerMethodField()

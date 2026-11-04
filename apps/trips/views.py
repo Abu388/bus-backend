@@ -31,7 +31,7 @@ from apps.trips.serializers import (
 
 
 # ============================================================================
-# 1. LIST TRIPS (Admin/Cashier) & START TRIP (Cashier Only)
+# 1. LIST TRIPS (Admin/Casher) & START TRIP (Casher Only)
 #    Endpoints: GET /trips/  |  POST /trips/
 # ============================================================================
 @extend_schema_view(
@@ -68,14 +68,14 @@ from apps.trips.serializers import (
         tags=['Trips'],
         summary='Start a new trip',
         description=(
-            'Starts a new trip for the chosen physical_bus (Cashier only). '
+            'Starts a new trip for the chosen physical_bus (Casher only). '
             'Automatically copies the bus route, assigns the next trip number, '
             'defaults direction to the opposite of the last trip, and creates a QR session.'
         ),
     ),
 )
 class TripListCreateView(generics.ListCreateAPIView):
-    # IsCasherRole allows Admin & Cashier to GET, and only Cashier to POST
+    # IsCasherRole allows Admin & Casher to GET, and only Casher to POST
     permission_classes = [IsCasherRole]
     serializer_class = TripSerializer
 
@@ -117,14 +117,14 @@ class TripListCreateView(generics.ListCreateAPIView):
                 if not bus.route:
                     raise ValidationError({"physical_bus": "Bus does not have a route assigned."})
 
-                # 3. Ensure neither the bus nor this cashier already has an open trip
+                # 3. Ensure neither the bus nor this casher already has an open trip
                 if Trip.objects.filter(physical_bus=bus, status=Trip.Status.ACTIVE).exists():
                     raise ValidationError({"physical_bus": "This bus already has an active trip."})
                 if Trip.objects.filter(casher=self.request.user, status=Trip.Status.ACTIVE).exists():
                     raise ValidationError({"casher": "You already have an active trip."})
 
                 # 4. Determine direction:
-                #    If the cashier didn't send a direction, check the bus's last ended trip
+                #    If the casher didn't send a direction, check the bus's last ended trip
                 #    and flip it (outbound -> inbound, otherwise -> outbound).
                 direction = serializer.validated_data.get('direction')
                 if not direction:
@@ -171,19 +171,19 @@ class TripListCreateView(generics.ListCreateAPIView):
         except IntegrityError:
             # Safety net if two simultaneous requests hit the database partial UniqueConstraint
             raise ValidationError(
-                {"detail": "Conflict: This bus or cashier already has an active trip."}
+                {"detail": "Conflict: This bus or casher already has an active trip."}
             )
 
 
 # ============================================================================
-# 2. GET CASHIER'S CURRENT ACTIVE TRIP
+# 2. GET CASHER'S CURRENT ACTIVE TRIP
 #    Endpoint: GET /trips/active/
 # ============================================================================
 @extend_schema_view(
     get=extend_schema(
         tags=['Trips'],
-        summary='Get current active trip for logged-in cashier',
-        description='Returns the cashier’s currently active trip (used when the mobile app restarts).',
+        summary='Get current active trip for logged-in casher',
+        description='Returns the casher’s currently active trip (used when the mobile app restarts).',
     )
 )
 class ActiveTripView(generics.RetrieveAPIView):
@@ -191,29 +191,29 @@ class ActiveTripView(generics.RetrieveAPIView):
     serializer_class = TripSerializer
 
     def get_object(self):
-        # Look up the active trip belonging to the logged-in cashier
+        # Look up the active trip belonging to the logged-in casher
         trip = (
             Trip.objects.select_related('physical_bus', 'route', 'casher', 'previous_trip')
             .filter(casher=self.request.user, status=Trip.Status.ACTIVE)
             .first()
         )
         if not trip:
-            raise NotFound("No active trip found for this cashier.")
+            raise NotFound("No active trip found for this casher.")
         return trip
 
 
 # ============================================================================
-# 3. END A TRIP (Cashier who started it OR Admin)
+# 3. END A TRIP (Casher who started it OR Admin)
 #    Endpoint: POST /trips/<uuid:pk>/end/
 # ============================================================================
 class EndTripView(APIView):
-    # Both Cashiers and Admins are authenticated users; we check the exact role/owner inside post()
+    # Both Cashers and Admins are authenticated users; we check the exact role/owner inside post()
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
         tags=['Trips'],
         summary='End an active trip',
-        description='Ends the trip and revokes its active QR session. Only allowed by the cashier who started it or an admin.',
+        description='Ends the trip and revokes its active QR session. Only allowed by the casher who started it or an admin.',
         request=None,
         responses={200: TripSerializer},
     )
@@ -225,9 +225,9 @@ class EndTripView(APIView):
                 pk=pk,
             )
 
-            # 2. Rule: Only the cashier who started this trip OR an admin can end it
+            # 2. Rule: Only the casher who started this trip OR an admin can end it
             if request.user != trip.casher and getattr(request.user, 'role', None) != 'admin':
-                raise PermissionDenied("Only the cashier who started this trip or an admin can end it.")
+                raise PermissionDenied("Only the casher who started this trip or an admin can end it.")
 
             # 3. Rule: Ending an already-ended trip returns a clear error
             if trip.status == Trip.Status.ENDED:
@@ -281,7 +281,7 @@ class ReverseTripView(APIView):
                 )
                 bus = PhysicalBus.objects.select_for_update().get(id=current_trip.physical_bus_id)
 
-                # 2. Verify this cashier owns the trip and the trip is still active
+                # 2. Verify this casher owns the trip and the trip is still active
                 if current_trip.casher != request.user:
                     raise PermissionDenied("You can only reverse your own active trip.")
                 if current_trip.status != Trip.Status.ACTIVE:
@@ -352,7 +352,7 @@ class ReverseTripView(APIView):
 
 
 # ============================================================================
-# 5. DISPLAY TRIP QR SESSION (Cashier / Admin)
+# 5. DISPLAY TRIP QR SESSION (Casher / Admin)
 #    Endpoint: GET /trips/<uuid:pk>/qr/
 # ============================================================================
 @extend_schema_view(
@@ -369,8 +369,8 @@ class TripQRView(generics.RetrieveAPIView):
     def get_object(self):
         trip = get_object_or_404(Trip, pk=self.kwargs['pk'])
 
-        # If the user is a cashier, make sure they are only viewing their own trip's QR
-        if getattr(self.request.user, 'role', None) == 'cashier' and trip.casher != self.request.user:
+        # If the user is a casher, make sure they are only viewing their own trip's QR
+        if getattr(self.request.user, 'role', None) == 'casher' and trip.casher != self.request.user:
             raise PermissionDenied("You can only view the QR session for your own trip.")
 
         qr_session = TripQRSession.objects.filter(
@@ -388,7 +388,7 @@ class TripQRView(generics.RetrieveAPIView):
 #    Endpoint: POST /trip-qr/scan/
 # ============================================================================
 class TripQRScanView(APIView):
-    # Passengers scanning the QR before paying do not need cashier/admin roles
+    # Passengers scanning the QR before paying do not need casher/admin roles
     permission_classes = [AllowAny]
     serializer_class = TripQRScanSerializer
 
@@ -398,7 +398,7 @@ class TripQRScanView(APIView):
         description=(
             'Validates the scanned QR token and returns the trip summary for the passenger: '
             'public bus number, route name, direction, and current active fare. '
-            'Does NOT expose cashier identity or bus targa.'
+            'Does NOT expose casher identity or bus targa.'
         ),
         request=TripQRScanSerializer,
         responses={
@@ -435,7 +435,7 @@ class TripQRScanView(APIView):
         # 4. Look up the current active fare for this route
         active_fare = Fare.objects.filter(route=route, effective_to__isnull=True).first()
 
-        # 5. Return ONLY passenger-safe summary fields (NO cashier identity, NO bus targa!)
+        # 5. Return ONLY passenger-safe summary fields (NO casher identity, NO bus targa!)
         return Response(
             {
                 "trip_id": trip.id,

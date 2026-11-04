@@ -5,7 +5,7 @@ urlpatterns = [
     # POST /trips/ (Start trip) and GET /trips/ (Admin trip history)
     path('trips/', views.TripListCreateView.as_view(), name='trip-list-create'),
 
-    # GET /trips/active/ (Cashier's current active trip)
+    # GET /trips/active/ (Casher's current active trip)
     path('trips/active/', views.ActiveTripView.as_view(), name='trip-active'),
 
     # POST /trips/<id>/end/ (End an active trip)

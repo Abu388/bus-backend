@@ -63,7 +63,7 @@ class TicketScan(BaseModel):
         blank=True,
         related_name='scans',
     )
-    cashier = models.ForeignKey(
+    casher = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
         related_name='ticket_scans',
@@ -82,4 +82,4 @@ class TicketScan(BaseModel):
         ordering = ['-scanned_at']
 
     def __str__(self):
-        return f"Scan by {self.cashier_id} -> {self.result} at {self.scanned_at}"
+        return f"Scan by {self.casher_id} -> {self.result} at {self.scanned_at}"
