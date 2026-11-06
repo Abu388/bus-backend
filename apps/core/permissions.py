@@ -1,21 +1,43 @@
-
 from rest_framework.permissions import BasePermission, SAFE_METHODS
+
 
 class IsAdminRole(BasePermission):
     def has_permission(self, request, view):
-        return request.user and request.user.is_authenticated and request.user.role == 'admin'
+        return bool(
+            request.user
+            and request.user.is_authenticated
+            and request.user.role == 'admin'
+        )
+
 
 class IsAdminOrReadOnly(BasePermission):
     def has_permission(self, request, view):
-        if request.method in SAFE_METHODS: #GET, HEAD, or OPTIONS methonds are safe methods, so we check if the request method is in SAFE_METHODS. If it is, we allow the request to proceed. If it is not, we check if the user is authenticated and has the 'admin' role. If both conditions are met, we allow the request to proceed. Otherwise, we deny the request.
+        if request.method in SAFE_METHODS:
             return True
-        return request.user and request.user.is_authenticated and request.user.role == 'admin' # we use this if the request for POST, PUT, PATCH, or DELETE
+        return bool(
+            request.user
+            and request.user.is_authenticated
+            and request.user.role == 'admin'
+        )
+
+
+class IsAdminOrCasherReadOnly(BasePermission):
+    """Admin can GET/POST/PUT/PATCH/DELETE; Casher can GET/HEAD/OPTIONS."""
+    def has_permission(self, request, view):
+        if not (request.user and request.user.is_authenticated):
+            return False
+        if request.user.role == 'admin':
+            return True
+        if request.user.role == 'casher' and request.method in SAFE_METHODS:
+            return True
+        return False
 
 
 class IsCasherRole(BasePermission):
+    """Allows Casher and Admin to read and write maintenance/casher endpoints."""
     def has_permission(self, request, view):
-        if request.user and request.user.is_authenticated and (request.user.role == 'admin' or request.user.role == 'casher'):  
-            if request.method in SAFE_METHODS  :
-                return True
-        return request.user and request.user.is_authenticated and request.user.role == 'casher'
-
+        return bool(
+            request.user
+            and request.user.is_authenticated
+            and request.user.role in ('admin', 'casher')
+        )

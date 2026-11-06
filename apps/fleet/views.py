@@ -9,7 +9,7 @@ from drf_spectacular.utils import (
 from rest_framework import generics
 from rest_framework.exceptions import ValidationError
 
-from apps.core.permissions import IsAdminRole, IsCasherRole
+from apps.core.permissions import IsAdminOrCasherReadOnly, IsCasherRole
 from apps.fleet.models import MaintenanceEvent, PhysicalBus
 from apps.fleet.serializers import MaintenanceEventSerializer, PhysicalBusSerializer
 
@@ -46,7 +46,7 @@ from apps.fleet.serializers import MaintenanceEventSerializer, PhysicalBusSerial
 
 
 class PhysicalBusListCreateView(generics.ListCreateAPIView):
-    permission_classes = [IsAdminRole]
+    permission_classes = [IsAdminOrCasherReadOnly]
     serializer_class = PhysicalBusSerializer
 
     def get_queryset(self):
@@ -86,7 +86,7 @@ class PhysicalBusListCreateView(generics.ListCreateAPIView):
     ),
 )
 class PhysicalBusDetailView(generics.RetrieveUpdateDestroyAPIView):
-    permission_classes = [IsAdminRole]
+    permission_classes = [IsAdminOrCasherReadOnly]
     serializer_class = PhysicalBusSerializer
     queryset = PhysicalBus.objects.select_related('route').all()
 
