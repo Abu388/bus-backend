@@ -23,6 +23,14 @@ class PhysicalBus(BaseModel):
         choices=BusStatus.choices,
         default=BusStatus.ACTIVE,
     )
+    casher = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='assigned_bus',
+        limit_choices_to={'role': 'casher'},
+    )
 
     def __str__(self):
         return self.targa
@@ -52,7 +60,7 @@ class MaintenanceEvent(BaseModel):
     )
 
     class Meta:
-        constraints = [ #Prevents someone from accidentally entering an end time that happens before the start time 
+        constraints = [
             models.UniqueConstraint(
                 fields=['bus'],
                 condition=Q(ended_at__isnull=True),

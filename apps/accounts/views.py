@@ -105,3 +105,15 @@ class CurrentUserView(APIView):
     )
     def get(self, request):
         return Response(UserProfileSerializer(request.user).data, status=status.HTTP_200_OK)
+
+from rest_framework import generics
+from apps.core.permissions import IsAdminRole
+
+
+class CasherListView(generics.ListAPIView):
+    """Returns all users with role='casher' so Admin can assign them to a bus."""
+    permission_classes = [IsAdminRole]
+    serializer_class = UserProfileSerializer
+
+    def get_queryset(self):
+        return CustomUser.objects.filter(role='casher', is_active=True).order_by('full_name')

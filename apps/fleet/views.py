@@ -43,14 +43,15 @@ from apps.fleet.serializers import MaintenanceEventSerializer, PhysicalBusSerial
         description='Create a new physical bus (Admin only). Route assignment is optional.',
     ),
 )
-
-
 class PhysicalBusListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsAdminOrCasherReadOnly]
     serializer_class = PhysicalBusSerializer
 
     def get_queryset(self):
-        queryset = PhysicalBus.objects.select_related('route').all()
+        queryset = PhysicalBus.objects.select_related('route', 'casher').all()
+
+        if getattr(self.request.user, 'role', None) == 'casher':
+            queryset = queryset.filter(casher=self.request.user)
 
         route_id = self.request.query_params.get('route')
         if route_id:
@@ -77,7 +78,7 @@ class PhysicalBusListCreateView(generics.ListCreateAPIView):
     patch=extend_schema(
         tags=['Fleet - Buses'],
         summary='Partially update a physical bus',
-        description='Update specific fields of a physical bus such as route or status (Admin only).',
+        description='Update specific fields of a physical bus such as route, casher, or status (Admin only).',
     ),
     delete=extend_schema(
         tags=['Fleet - Buses'],
@@ -88,7 +89,7 @@ class PhysicalBusListCreateView(generics.ListCreateAPIView):
 class PhysicalBusDetailView(generics.RetrieveUpdateDestroyAPIView):
     permission_classes = [IsAdminOrCasherReadOnly]
     serializer_class = PhysicalBusSerializer
-    queryset = PhysicalBus.objects.select_related('route').all()
+    queryset = PhysicalBus.objects.select_related('route', 'casher').all()
 
     def perform_destroy(self, instance):
         try:
@@ -124,7 +125,7 @@ class PhysicalBusDetailView(generics.RetrieveUpdateDestroyAPIView):
     post=extend_schema(
         tags=['Fleet - Maintenance'],
         summary='Start a maintenance event',
-        description='Open a new maintenance event for a bus (Casher only). Automatically sets bus status to maintenance.',
+        description='Open a new maintenance event for a bus (Casher/Admin). Automatically sets bus status to maintenance.',
     ),
 )
 class MaintenanceEventListCreateView(generics.ListCreateAPIView):
@@ -135,6 +136,9 @@ class MaintenanceEventListCreateView(generics.ListCreateAPIView):
         queryset = MaintenanceEvent.objects.select_related(
             'bus', 'started_by', 'ended_by'
         ).order_by('-started_at')
+
+        if getattr(self.request.user, 'role', None) == 'casher':
+            queryset = queryset.filter(bus__casher=self.request.user)
 
         bus_id = self.request.query_params.get('bus')
         if bus_id:
@@ -149,6 +153,11 @@ class MaintenanceEventListCreateView(generics.ListCreateAPIView):
     def perform_create(self, serializer):
         with transaction.atomic():
             bus = serializer.validated_data['bus']
+
+            if getattr(self.request.user, 'role', None) == 'casher' and bus.casher_id != self.request.user.id:
+                raise ValidationError(
+                    {"bus": "You can only report maintenance for your own assigned bus."}
+                )
 
             if bus.status == PhysicalBus.BusStatus.RETIRED:
                 raise ValidationError(
@@ -176,7 +185,7 @@ class MaintenanceEventListCreateView(generics.ListCreateAPIView):
     put=extend_schema(
         tags=['Fleet - Maintenance'],
         summary='Update a maintenance event',
-        description='Update a maintenance event (Casher only).',
+        description='Update a maintenance event (Casher/Admin).',
     ),
     patch=extend_schema(
         tags=['Fleet - Maintenance'],
