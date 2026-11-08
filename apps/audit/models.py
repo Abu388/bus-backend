@@ -23,6 +23,11 @@ class AuditLog(BaseModel):
         ROUTE_UPDATED = 'route.updated', 'Route Updated'
         USER_ROLE_CHANGED = 'user.role_changed', 'User Role Changed'
         USER_SUSPENDED = 'user.suspended', 'User Suspended'
+        PAYMENT_INITIATED = 'payment.initiated', 'Payment Initiated'
+        PAYMENT_SUCCEEDED = 'payment.succeeded', 'Payment Succeeded'
+        PAYMENT_FAILED = 'payment.failed', 'Payment Failed'
+        TICKET_ISSUED = 'ticket.issued', 'Ticket Issued'
+        TICKET_VALIDATED = 'ticket.validated', 'Ticket Validated'
 
     actor = models.ForeignKey(
         settings.AUTH_USER_MODEL,

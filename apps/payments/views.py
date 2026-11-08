@@ -21,6 +21,8 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.audit.models import AuditLog
+from apps.audit.services import record
 from apps.core.permissions import IsCasherRole
 from apps.fares.models import Fare
 from apps.payments.models import Payment, ProviderEvent
@@ -30,6 +32,7 @@ from apps.payments.serializers import (
     PaymentSerializer,
 )
 from apps.trips.models import Trip, TripQRSession
+from apps.tickets.models import Ticket
 from apps.tickets.services import issue_ticket_for_payment
 
 
@@ -50,6 +53,54 @@ def verify_webhook_signature(raw_body: bytes, signature_header: str) -> bool:
     return hmac.compare_digest(expected_sig, signature_header.strip())
 
 
+def _ensure_payment_succeeded_and_ticket_issued(payment: Payment, actor=None) -> Payment:
+    """
+    Self-heals a payment in our demo environment:
+    1. If status is PENDING: upgrades to SUCCEEDED and sets paid_at.
+    2. Ensures a Ticket is created and linked via issue_ticket_for_payment(payment).
+    3. Attaches payment.ticket = ticket.
+    4. Records PAYMENT_SUCCEEDED audit log if newly transitioned to SUCCEEDED.
+    """
+    needs_save = False
+    newly_succeeded = False
+    if payment.status == Payment.Status.PENDING:
+        payment.status = Payment.Status.SUCCEEDED
+        if not payment.paid_at:
+            payment.paid_at = timezone.now()
+        needs_save = True
+        newly_succeeded = True
+
+    if needs_save:
+        payment.save(update_fields=['status', 'paid_at', 'updated_at'])
+
+    if newly_succeeded:
+        try:
+            record(
+                actor=actor or payment.passenger,
+                action=AuditLog.Action.PAYMENT_SUCCEEDED,
+                entity_type='payment',
+                entity_id=payment.id,
+                metadata={
+                    'amount': str(payment.amount),
+                    'trip_id': str(payment.trip_id),
+                    'provider': payment.provider,
+                    'provider_ref': payment.provider_ref,
+                },
+            )
+        except Exception:
+            pass
+
+    # Ensure ticket is issued and attached
+    ticket = getattr(payment, 'ticket', None)
+    if not ticket:
+        ticket = Ticket.objects.filter(payment=payment).first()
+    if not ticket:
+        ticket = issue_ticket_for_payment(payment)
+
+    payment.ticket = ticket
+    return payment
+
+
 # ============================================================================
 # 1. INITIATE A PAYMENT (Passenger)
 #    Endpoint: POST /payments/initiate/
@@ -57,6 +108,31 @@ def verify_webhook_signature(raw_body: bytes, signature_header: str) -> bool:
 class InitiatePaymentView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = PaymentInitiateSerializer
+
+    @extend_schema(
+        tags=['Payments'],
+        summary='List my payments or get latest payment (Passenger)',
+        description='Returns recent payments for the authenticated passenger, self-healing any pending states.',
+        responses={200: PaymentSerializer(many=True)},
+    )
+    def get(self, request):
+        qs = (
+            Payment.objects.filter(passenger=request.user)
+            .select_related('trip', 'trip__route', 'fare', 'passenger')
+            .order_by('-created_at')
+        )
+        trip_id = request.query_params.get('trip') or request.query_params.get('trip_id')
+        if trip_id:
+            qs = qs.filter(trip_id=trip_id)
+
+        payments = list(qs)
+        for payment in payments:
+            _ensure_payment_succeeded_and_ticket_issued(payment, actor=request.user)
+
+        return Response(
+            PaymentSerializer(payments, many=True).data,
+            status=status.HTTP_200_OK,
+        )
 
     @extend_schema(
         tags=['Payments'],
@@ -93,14 +169,19 @@ class InitiatePaymentView(APIView):
                 {"idempotency_key": "Idempotency-Key header (or body field) is required."}
             )
 
-        # 3. Idempotency check: if this passenger already sent this exact key, return the existing payment
-        existing_payment = Payment.objects.filter(
-            passenger=request.user,
-            idempotency_key=idempotency_key,
-        ).first()
+        # 3. Idempotency check: if this passenger already sent this exact key, heal and return the existing payment
+        existing_payment = (
+            Payment.objects.filter(
+                passenger=request.user,
+                idempotency_key=idempotency_key,
+            )
+            .select_related('trip', 'trip__route', 'fare', 'passenger')
+            .first()
+        )
         if existing_payment:
+            payment = _ensure_payment_succeeded_and_ticket_issued(existing_payment, actor=request.user)
             return Response(
-                PaymentSerializer(existing_payment).data,
+                PaymentSerializer(payment).data,
                 status=status.HTTP_200_OK,
             )
 
@@ -129,22 +210,29 @@ class InitiatePaymentView(APIView):
         if not active_fare:
             raise ValidationError({"fare": "No active fare is configured for this route."})
 
-        # 6. Create the succeeded payment and issue ticket inside an atomic transaction (Instant Demo Confirmation)
+        # 6. Check if passenger already has a payment on this trip (scan refresh / rescan resilience)
+        existing_trip_payment = (
+            Payment.objects.filter(
+                trip=trip,
+                passenger=request.user,
+                status__in=[Payment.Status.PENDING, Payment.Status.SUCCEEDED],
+            )
+            .select_related('trip', 'trip__route', 'fare', 'passenger')
+            .first()
+        )
+        if existing_trip_payment:
+            payment = _ensure_payment_succeeded_and_ticket_issued(existing_trip_payment, actor=request.user)
+            return Response(
+                PaymentSerializer(payment).data,
+                status=status.HTTP_200_OK,
+            )
+
+        # 7. Create the succeeded payment and issue ticket inside an atomic transaction (Instant Demo Confirmation)
         provider_name = getattr(settings, 'PAYMENT_PROVIDER', 'mock')
         provider_ref = f"MOCK-{uuid.uuid4().hex[:12].upper()}"
 
         try:
             with transaction.atomic():
-                # Check if passenger already has a pending or succeeded payment on this trip
-                if Payment.objects.filter(
-                    trip=trip,
-                    passenger=request.user,
-                    status__in=[Payment.Status.PENDING, Payment.Status.SUCCEEDED],
-                ).exists():
-                    raise ValidationError(
-                        {"detail": "You already have a pending or completed payment for this trip."}
-                    )
-
                 payment = Payment.objects.create(
                     trip=trip,
                     passenger=request.user,
@@ -157,17 +245,57 @@ class InitiatePaymentView(APIView):
                     idempotency_key=idempotency_key,
                     expires_at=now + timedelta(minutes=10),
                 )
+                try:
+                    record(
+                        actor=request.user,
+                        action=AuditLog.Action.PAYMENT_INITIATED,
+                        entity_type='payment',
+                        entity_id=payment.id,
+                        metadata={
+                            'amount': str(payment.amount),
+                            'trip_id': str(trip.id),
+                            'fare_id': str(active_fare.id),
+                            'idempotency_key': idempotency_key,
+                        },
+                    )
+                    record(
+                        actor=request.user,
+                        action=AuditLog.Action.PAYMENT_SUCCEEDED,
+                        entity_type='payment',
+                        entity_id=payment.id,
+                        metadata={
+                            'amount': str(payment.amount),
+                            'trip_id': str(trip.id),
+                            'provider': provider_name,
+                            'provider_ref': provider_ref,
+                        },
+                    )
+                except Exception:
+                    pass
+
                 ticket = issue_ticket_for_payment(payment)
                 payment.ticket = ticket
         except IntegrityError:
-            # If two concurrent retries hit the database at the same millisecond, return existing if idempotent
-            retry_payment = Payment.objects.filter(
-                passenger=request.user,
-                idempotency_key=idempotency_key,
-            ).first()
+            # If two concurrent retries hit the database at the same millisecond, return healed existing payment
+            retry_payment = (
+                Payment.objects.filter(
+                    passenger=request.user,
+                    idempotency_key=idempotency_key,
+                )
+                .select_related('trip', 'trip__route', 'fare', 'passenger')
+                .first()
+                or Payment.objects.filter(
+                    trip=trip,
+                    passenger=request.user,
+                    status__in=[Payment.Status.PENDING, Payment.Status.SUCCEEDED],
+                )
+                .select_related('trip', 'trip__route', 'fare', 'passenger')
+                .first()
+            )
             if retry_payment:
+                payment = _ensure_payment_succeeded_and_ticket_issued(retry_payment, actor=request.user)
                 return Response(
-                    PaymentSerializer(retry_payment).data,
+                    PaymentSerializer(payment).data,
                     status=status.HTTP_200_OK,
                 )
             raise ValidationError(
@@ -197,13 +325,13 @@ class PaymentDetailView(generics.RetrieveAPIView):
 
     def get_object(self):
         payment = get_object_or_404(
-            Payment.objects.select_related('trip', 'fare', 'passenger'),
+            Payment.objects.select_related('trip', 'trip__route', 'fare', 'passenger'),
             pk=self.kwargs['pk'],
         )
         # Only the passenger who owns the payment or an admin can view it
         if payment.passenger != self.request.user and getattr(self.request.user, 'role', None) != 'admin':
             raise PermissionDenied("You do not have permission to view this payment.")
-        return payment
+        return _ensure_payment_succeeded_and_ticket_issued(payment, actor=self.request.user)
 
 
 # ============================================================================
@@ -327,18 +455,37 @@ class PaymentWebhookView(APIView):
                     payment.status = Payment.Status.SUCCEEDED
                     payment.paid_at = now
                     payment.save(update_fields=['status', 'paid_at', 'updated_at'])
-
-                    # =========================================================
-                    # TODO (Next App - Tickets):
-                    # Issue the Passenger Ticket here in this exact transaction!
-                    # e.g., issue_ticket_for_payment(payment)
-                    # =========================================================
+                    try:
+                        record(
+                            actor=payment.passenger,
+                            action=AuditLog.Action.PAYMENT_SUCCEEDED,
+                            entity_type='payment',
+                            entity_id=payment.id,
+                            metadata={
+                                'amount': str(payment.amount),
+                                'trip_id': str(payment.trip_id),
+                                'provider': provider,
+                                'provider_ref': provider_ref,
+                            },
+                        )
+                    except Exception:
+                        pass
                     issue_ticket_for_payment(payment)
 
             elif event_status == 'failed':
                 payment.status = Payment.Status.FAILED
                 payment.failure_reason = payload.get('failure_reason') or "Payment failed at provider."
                 payment.save(update_fields=['status', 'failure_reason', 'updated_at'])
+                try:
+                    record(
+                        actor=payment.passenger,
+                        action=AuditLog.Action.PAYMENT_FAILED,
+                        entity_type='payment',
+                        entity_id=payment.id,
+                        metadata={'reason': payment.failure_reason},
+                    )
+                except Exception:
+                    pass
 
             elif event_status == 'expired':
                 payment.status = Payment.Status.EXPIRED

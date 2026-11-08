@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from apps.payments.models import Payment
+from apps.tickets.serializers import TicketSerializer
 
 
 class PaymentInitiateSerializer(serializers.Serializer):
@@ -20,6 +21,12 @@ class PaymentSerializer(serializers.ModelSerializer):
     All fields are read-only because the backend and webhook control the lifecycle.
     """
     ticket_id = serializers.UUIDField(source='ticket.id', read_only=True, allow_null=True)
+    ticket = TicketSerializer(read_only=True, allow_null=True)
+    route_name = serializers.CharField(source='trip.route.name', read_only=True, allow_null=True)
+    public_bus_number = serializers.IntegerField(
+        source='trip.route.public_bus_number', read_only=True, allow_null=True
+    )
+
     class Meta:
         model = Payment
         fields = [
@@ -37,6 +44,9 @@ class PaymentSerializer(serializers.ModelSerializer):
             'paid_at',
             'failure_reason',
             'ticket_id',
+            'ticket',
+            'route_name',
+            'public_bus_number',
         ]
         read_only_fields = fields
 

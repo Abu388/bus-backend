@@ -6,6 +6,8 @@ from django.conf import settings
 from django.core import signing
 from django.utils import timezone
 
+from apps.audit.models import AuditLog
+from apps.audit.services import record
 from apps.tickets.models import Ticket
 
 TICKET_SIGNER_SALT = 'bus-ticket-rotating-qr-v1'
@@ -32,7 +34,7 @@ def issue_ticket_for_payment(payment) -> Ticket:
     max_hours = getattr(settings, 'TICKET_MAX_DURATION_HOURS', 3)
     expires_at = now + timedelta(hours=max_hours)
 
-    return Ticket.objects.create(
+    ticket = Ticket.objects.create(
         payment=payment,
         passenger=payment.passenger,
         trip=payment.trip,
@@ -40,6 +42,22 @@ def issue_ticket_for_payment(payment) -> Ticket:
         issued_at=now,
         expires_at=expires_at,
     )
+    try:
+        record(
+            actor=payment.passenger,
+            action=AuditLog.Action.TICKET_ISSUED,
+            entity_type='ticket',
+            entity_id=ticket.id,
+            metadata={
+                'code': ticket.code,
+                'trip_id': str(payment.trip_id),
+                'payment_id': str(payment.id),
+            },
+        )
+    except Exception:
+        pass
+
+    return ticket
 
 
 def generate_rotating_ticket_token(ticket: Ticket) -> dict:

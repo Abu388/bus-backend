@@ -7,6 +7,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
+from apps.audit.models import AuditLog
 from apps.fares.models import Fare
 from apps.fleet.models import PhysicalBus
 from apps.payments.models import Payment
@@ -130,10 +131,20 @@ class TicketValidationStatusTestCase(TestCase):
         self.assertEqual(detail_resp.status_code, status.HTTP_200_OK)
         self.assertEqual(detail_resp.json()['status'], 'used')
 
-        # 6. Check GET /api/tickets/{id}/code/ returns status "used"
+        # 6. Check GET /api/tickets/{id}/code/ returns status "used" and token None
         code_resp = self.client.get(f'/api/tickets/{self.ticket.id}/code/')
         self.assertEqual(code_resp.status_code, status.HTTP_200_OK)
         self.assertEqual(code_resp.json()['status'], 'used')
+        self.assertIsNone(code_resp.json()['token'])
+        self.assertIsNone(code_resp.json()['rotating_token'])
+
+        # 7. Check AuditLog recorded TICKET_VALIDATED
+        self.assertTrue(
+            AuditLog.objects.filter(action=AuditLog.Action.TICKET_VALIDATED, entity_id=str(self.ticket.id)).exists()
+        )
+
+        # 8. Check ticketscan_set alias works without AttributeError
+        self.assertEqual(self.ticket.ticketscan_set.count(), 1)
 
     def test_second_validation_attempt_rejected_as_already_used(self):
         code_data = generate_rotating_ticket_token(self.ticket)

@@ -10,6 +10,8 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
+from apps.audit.models import AuditLog
+from apps.audit.services import record
 from apps.core.permissions import IsCasherRole
 from apps.tickets.models import Ticket, TicketScan
 from apps.tickets.serializers import TicketSerializer, TicketValidateInputSerializer
@@ -99,11 +101,28 @@ class TicketRotatingCodeView(APIView):
             Ticket.objects.select_related('trip', 'passenger').prefetch_related('scans'),
             pk=pk,
         )
-        if ticket.passenger != request.user:
+        if ticket.passenger != request.user and getattr(request.user, 'role', None) != 'admin':
             raise PermissionDenied("You can only generate a scan code for your own ticket.")
 
+        computed_status = ticket.get_computed_status()
+        if computed_status in ('used', 'expired'):
+            return Response(
+                {
+                    "ticket_id": ticket.id,
+                    "code": ticket.code,
+                    "token": None,
+                    "rotating_token": None,
+                    "valid_for_seconds": 0,
+                    "expires_at": None,
+                    "status": computed_status,
+                    "detail": f"Ticket is {computed_status}.",
+                },
+                status=status.HTTP_200_OK,
+            )
+
         data = generate_rotating_ticket_token(ticket)
-        data["status"] = ticket.get_computed_status()
+        data["rotating_token"] = data.get("token")
+        data["status"] = computed_status
         return Response(data, status=status.HTTP_200_OK)
 
 
@@ -220,6 +239,22 @@ class TicketValidateView(APIView):
             result=scan_result,
             scanned_at=now,
         )
+
+        if scan_result == TicketScan.Result.VALID:
+            try:
+                record(
+                    actor=request.user,
+                    action=AuditLog.Action.TICKET_VALIDATED,
+                    entity_type='ticket',
+                    entity_id=ticket.id,
+                    metadata={
+                        'code': ticket.code,
+                        'trip_id': str(active_trip.id) if active_trip else str(ticket.trip_id),
+                        'passenger_id': str(ticket.passenger_id),
+                    },
+                )
+            except Exception:
+                pass
 
         return Response(
             {

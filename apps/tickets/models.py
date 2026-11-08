@@ -37,14 +37,24 @@ class Ticket(BaseModel):
             )
         ]
 
+    @property
+    def ticketscan_set(self):
+        """Fallback alias so code accessing either 'scans' or 'ticketscan_set' never raises AttributeError."""
+        return self.scans
+
     def get_computed_status(self) -> str:
         """
         Returns 'used' if ticket was validated/scanned by a casher.
         Valid only if the trip is still active AND current server time is before expires_at.
         Otherwise 'expired'.
         """
-        if hasattr(self, 'scans') and self.scans.filter(result='valid').exists():
-            return 'used'
+        scans_mgr = getattr(self, 'scans', None) or getattr(self, 'ticketscan_set', None)
+        if scans_mgr is not None:
+            if hasattr(self, '_prefetched_objects_cache') and 'scans' in self._prefetched_objects_cache:
+                if any(scan.result == TicketScan.Result.VALID for scan in self.scans.all()):
+                    return 'used'
+            elif scans_mgr.filter(result=TicketScan.Result.VALID).exists():
+                return 'used'
         if self.trip.status == Trip.Status.ACTIVE and timezone.now() < self.expires_at:
             return 'valid'
         return 'expired'
