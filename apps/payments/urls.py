@@ -2,7 +2,8 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
-    # POST /payments/initiate/ (Passenger starts a payment from a QR token)
+    # POST /payments/ and POST /payments/initiate/ (Passenger starts a payment from a QR token)
+    path('payments/', views.InitiatePaymentView.as_view(), name='payment-create'),
     path('payments/initiate/', views.InitiatePaymentView.as_view(), name='payment-initiate'),
 
     # GET /payments/<id>/ (Passenger or Admin checks payment status)

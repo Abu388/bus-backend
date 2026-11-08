@@ -32,12 +32,20 @@ class BusLiveStateSerializer(serializers.ModelSerializer):
     age_seconds = serializers.SerializerMethodField()
     is_stale = serializers.SerializerMethodField()
     next_fermata_name = serializers.CharField(source='next_fermata.name', read_only=True)
+    route = serializers.UUIDField(source='trip.route_id', read_only=True)
+    public_bus_number = serializers.IntegerField(source='trip.route.public_bus_number', read_only=True)
+    route_name = serializers.CharField(source='trip.route.name', read_only=True)
+    targa = serializers.CharField(source='bus.targa', read_only=True)
 
     class Meta:
         model = BusLiveState
         fields = [
             'bus',
             'trip',
+            'route',
+            'public_bus_number',
+            'route_name',
+            'targa',
             'latitude',
             'longitude',
             'speed',

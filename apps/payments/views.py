@@ -129,7 +129,7 @@ class InitiatePaymentView(APIView):
         if not active_fare:
             raise ValidationError({"fare": "No active fare is configured for this route."})
 
-        # 6. Create the pending payment inside an atomic transaction
+        # 6. Create the succeeded payment and issue ticket inside an atomic transaction (Instant Demo Confirmation)
         provider_name = getattr(settings, 'PAYMENT_PROVIDER', 'mock')
         provider_ref = f"MOCK-{uuid.uuid4().hex[:12].upper()}"
 
@@ -150,12 +150,15 @@ class InitiatePaymentView(APIView):
                     passenger=request.user,
                     fare=active_fare,
                     amount=active_fare.amount,  # Copies exact price at payment time
-                    status=Payment.Status.PENDING,
+                    status=Payment.Status.SUCCEEDED,
+                    paid_at=now,
                     provider=provider_name,
                     provider_ref=provider_ref,
                     idempotency_key=idempotency_key,
                     expires_at=now + timedelta(minutes=10),
                 )
+                ticket = issue_ticket_for_payment(payment)
+                payment.ticket = ticket
         except IntegrityError:
             # If two concurrent retries hit the database at the same millisecond, return existing if idempotent
             retry_payment = Payment.objects.filter(

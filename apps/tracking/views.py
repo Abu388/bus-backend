@@ -39,7 +39,7 @@ class LiveBusesListView(generics.ListAPIView):
     serializer_class = BusLiveStateSerializer
 
     def get_queryset(self):
-        queryset = BusLiveState.objects.select_related('bus', 'trip', 'next_fermata').all()
+        queryset = BusLiveState.objects.select_related('bus', 'trip', 'trip__route', 'next_fermata').all()
         if getattr(self.request.user, 'role', None) == 'admin':
             return queryset
         return queryset.filter(trip__status='active', bus__status='active')
@@ -72,7 +72,9 @@ class BusSearchByNumberView(generics.ListAPIView):
         number = self.request.query_params.get('number')
         if not number:
             raise ValidationError("Please provide a bus number in the query (?number=...).")
-        return BusLiveState.objects.select_related('bus', 'trip', 'next_fermata').filter(
+        if not number.isdigit():
+            return BusLiveState.objects.none()
+        return BusLiveState.objects.select_related('bus', 'trip', 'trip__route', 'next_fermata').filter(
             trip__route__public_bus_number=number,
             trip__status='active',
             bus__status='active',
