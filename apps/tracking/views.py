@@ -39,7 +39,7 @@ class LiveBusesListView(generics.ListAPIView):
     serializer_class = BusLiveStateSerializer
 
     def get_queryset(self):
-        queryset = BusLiveState.objects.select_related('bus', 'trip', 'trip__route', 'next_fermata').all()
+        queryset = BusLiveState.objects.select_related('bus', 'bus__route', 'trip', 'trip__route', 'next_fermata').all()
         if getattr(self.request.user, 'role', None) == 'admin':
             return queryset
         return queryset.filter(trip__status='active', bus__status='active')
@@ -74,7 +74,7 @@ class BusSearchByNumberView(generics.ListAPIView):
             raise ValidationError("Please provide a bus number in the query (?number=...).")
         if not number.isdigit():
             return BusLiveState.objects.none()
-        return BusLiveState.objects.select_related('bus', 'trip', 'trip__route', 'next_fermata').filter(
+        return BusLiveState.objects.select_related('bus', 'bus__route', 'trip', 'trip__route', 'next_fermata').filter(
             trip__route__public_bus_number=number,
             trip__status='active',
             bus__status='active',
@@ -95,12 +95,17 @@ class BusLocationView(APIView):
     )
     def get(self, request, pk):
         live_state = (
-            BusLiveState.objects.select_related('bus', 'trip', 'next_fermata')
+            BusLiveState.objects.select_related('bus', 'bus__route', 'trip', 'trip__route', 'next_fermata')
             .filter(bus_id=pk)
             .first()
         )
         if not live_state:
             raise NotFound("No location data found for this bus.")
+        if live_state.trip is None or getattr(live_state.trip, 'status', None) != 'active':
+            current_active = Trip.objects.filter(physical_bus_id=pk, status='active').first()
+            if current_active:
+                live_state.trip = current_active
+                live_state.save(update_fields=['trip'])
         return Response(BusLiveStateSerializer(live_state).data)
 
     @extend_schema(
@@ -159,7 +164,7 @@ class BusLocationView(APIView):
                 dist_m, next_stop = calculate_progress_and_next_stop(
                     active_trip, data['latitude'], data['longitude']
                 )
-                BusLiveState.objects.update_or_create(
+                live_state, _ = BusLiveState.objects.update_or_create(
                     bus=active_trip.physical_bus,
                     defaults={
                         'trip': active_trip,
@@ -173,6 +178,15 @@ class BusLocationView(APIView):
                         'next_fermata': next_stop,
                     },
                 )
+            else:
+                live_state = existing_live
+
+            # Automatically look up and link active trip if missing or inactive
+            if live_state.trip is None or getattr(live_state.trip, 'status', None) != 'active':
+                current_active = Trip.objects.filter(physical_bus=active_trip.physical_bus, status='active').first()
+                if current_active:
+                    live_state.trip = current_active
+                    live_state.save(update_fields=['trip'])
 
         return Response({"tracking_active": True}, status=status.HTTP_200_OK)
 

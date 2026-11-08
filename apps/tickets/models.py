@@ -39,8 +39,12 @@ class Ticket(BaseModel):
 
     def get_computed_status(self) -> str:
         """
+        Returns 'used' if ticket was validated/scanned by a casher.
         Valid only if the trip is still active AND current server time is before expires_at.
+        Otherwise 'expired'.
         """
+        if hasattr(self, 'scans') and self.scans.filter(result='valid').exists():
+            return 'used'
         if self.trip.status == Trip.Status.ACTIVE and timezone.now() < self.expires_at:
             return 'valid'
         return 'expired'

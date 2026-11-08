@@ -32,9 +32,9 @@ class BusLiveStateSerializer(serializers.ModelSerializer):
     age_seconds = serializers.SerializerMethodField()
     is_stale = serializers.SerializerMethodField()
     next_fermata_name = serializers.CharField(source='next_fermata.name', read_only=True)
-    route = serializers.UUIDField(source='trip.route_id', read_only=True)
-    public_bus_number = serializers.IntegerField(source='trip.route.public_bus_number', read_only=True)
-    route_name = serializers.CharField(source='trip.route.name', read_only=True)
+    route = serializers.SerializerMethodField()
+    public_bus_number = serializers.SerializerMethodField()
+    route_name = serializers.SerializerMethodField()
     targa = serializers.CharField(source='bus.targa', read_only=True)
 
     class Meta:
@@ -59,6 +59,27 @@ class BusLiveStateSerializer(serializers.ModelSerializer):
             'is_stale',
         ]
         read_only_fields = fields
+
+    def get_route(self, obj):
+        if obj.trip and obj.trip.route_id:
+            return str(obj.trip.route_id)
+        if obj.bus and obj.bus.route_id:
+            return str(obj.bus.route_id)
+        return None
+
+    def get_public_bus_number(self, obj):
+        if obj.trip and obj.trip.route:
+            return obj.trip.route.public_bus_number
+        if obj.bus and obj.bus.route:
+            return obj.bus.route.public_bus_number
+        return None
+
+    def get_route_name(self, obj):
+        if obj.trip and obj.trip.route:
+            return obj.trip.route.name
+        if obj.bus and obj.bus.route:
+            return obj.bus.route.name
+        return None
 
     def get_age_seconds(self, obj) -> float:
         # Calculates how many seconds have passed since the server received this ping

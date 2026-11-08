@@ -51,6 +51,7 @@ class TicketListView(generics.ListAPIView):
     def get_queryset(self):
         return (
             Ticket.objects.select_related('payment', 'trip', 'trip__route')
+            .prefetch_related('scans')
             .filter(passenger=self.request.user)
             .order_by('-issued_at')
         )
@@ -72,7 +73,8 @@ class TicketDetailView(generics.RetrieveAPIView):
 
     def get_object(self):
         ticket = get_object_or_404(
-            Ticket.objects.select_related('payment', 'trip', 'trip__route', 'passenger'),
+            Ticket.objects.select_related('payment', 'trip', 'trip__route', 'passenger')
+            .prefetch_related('scans'),
             pk=self.kwargs['pk'],
         )
         if ticket.passenger != self.request.user and getattr(self.request.user, 'role', None) != 'admin':
@@ -94,7 +96,7 @@ class TicketRotatingCodeView(APIView):
     )
     def get(self, request, pk):
         ticket = get_object_or_404(
-            Ticket.objects.select_related('trip', 'passenger'),
+            Ticket.objects.select_related('trip', 'passenger').prefetch_related('scans'),
             pk=pk,
         )
         if ticket.passenger != request.user:
@@ -185,8 +187,26 @@ class TicketValidateView(APIView):
                 status=status.HTTP_200_OK,
             )
 
-        #    (c) Check computed ticket status ('valid' vs 'expired')
+        #    (c) Check computed ticket status ('valid' vs 'expired' vs 'used')
         computed_status = ticket.get_computed_status()
+        if computed_status == 'used':
+            TicketScan.objects.create(
+                ticket=ticket,
+                casher=request.user,
+                trip=active_trip,
+                result=TicketScan.Result.INVALID,
+                scanned_at=now,
+            )
+            return Response(
+                {
+                    "result": TicketScan.Result.INVALID,
+                    "ticket_code": ticket.code,
+                    "passenger_masked": mask_passenger_name(ticket.passenger),
+                    "detail": "This ticket has already been used.",
+                },
+                status=status.HTTP_200_OK,
+            )
+
         scan_result = (
             TicketScan.Result.VALID
             if computed_status == 'valid'

@@ -97,3 +97,51 @@ class TrackingMetadataTestCase(TestCase):
         response = self.client.get('/api/buses/search/?number=12a')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.json(), [])
+
+    def test_fallback_to_bus_route_when_trip_is_none(self):
+        self.live_state.trip = None
+        self.live_state.save()
+
+        serializer = BusLiveStateSerializer(self.live_state)
+        data = serializer.data
+
+        self.assertIsNone(data['trip'])
+        self.assertEqual(data['route'], str(self.route.id))
+        self.assertEqual(data['public_bus_number'], 124)
+        self.assertEqual(data['route_name'], 'Megenagna - Tor Hailoch')
+        self.assertEqual(data['targa'], '3-A12345')
+
+    def test_location_ping_relinks_active_trip_if_trip_was_none(self):
+        self.live_state.trip = None
+        self.live_state.save()
+        self.client.force_authenticate(user=self.casher)
+
+        ping_time = timezone.now()
+        response = self.client.post(
+            f'/api/buses/{self.bus.id}/location/',
+            {
+                'latitude': 9.0215,
+                'longitude': 38.8015,
+                'speed': 10.0,
+                'recorded_at': ping_time.isoformat(),
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.live_state.refresh_from_db()
+        self.assertEqual(self.live_state.trip, self.trip)
+
+    def test_location_get_relinks_active_trip_if_trip_was_none(self):
+        self.live_state.trip = None
+        self.live_state.save()
+        self.client.force_authenticate(user=self.casher)
+
+        response = self.client.get(f'/api/buses/{self.bus.id}/location/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        self.assertEqual(data['route'], str(self.route.id))
+        self.assertEqual(data['public_bus_number'], 124)
+
+        self.live_state.refresh_from_db()
+        self.assertEqual(self.live_state.trip, self.trip)

@@ -42,8 +42,35 @@ class RouteDirectionSerializer(serializers.ModelSerializer):
 class RouteSerializer(serializers.ModelSerializer):
     stops = RouteStopSerializer(many=True, read_only=True)
     directions = RouteDirectionSerializer(many=True, read_only=True)
+    fermatas = serializers.SerializerMethodField()
+
     class Meta:
         model = Route
-        fields = ['id', 'public_bus_number', 'name', 'status', 'created_at','updated_at','stops','directions']
+        fields = [
+            'id',
+            'public_bus_number',
+            'name',
+            'status',
+            'created_at',
+            'updated_at',
+            'stops',
+            'directions',
+            'fermatas',
+        ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_fermatas(self, obj):
+        # Returns ordered list of stops with fermata coordinates for map polyline rendering
+        stops = obj.stops.all()
+        return [
+            {
+                'id': stop.fermata.id,
+                'name': stop.fermata.name,
+                'latitude': stop.fermata.latitude,
+                'longitude': stop.fermata.longitude,
+                'sequence_number': stop.sequence_number,
+                'order': stop.sequence_number,
+            }
+            for stop in stops
+        ]
          
