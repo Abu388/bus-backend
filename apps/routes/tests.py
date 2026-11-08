@@ -53,3 +53,27 @@ class RouteFermatasTestCase(TestCase):
         self.assertEqual(len(data['fermatas']), 4)
         self.assertEqual(data['fermatas'][0]['name'], 'Mexico')
         self.assertEqual(data['fermatas'][3]['name'], 'Megenagna')
+
+    def test_routes_list_and_detail_expose_geometry_polyline_and_coordinates(self):
+        # GET /api/routes/
+        response = self.client.get('/api/routes/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        route_data = response.json()[0]
+
+        self.assertIn('geometry', route_data)
+        self.assertIn('polyline', route_data)
+        self.assertIn('coordinates', route_data)
+        self.assertIsInstance(route_data['geometry'], list)
+        self.assertTrue(len(route_data['geometry']) >= 4)
+        self.assertEqual(route_data['geometry'], route_data['polyline'])
+        self.assertEqual(route_data['geometry'], route_data['coordinates'])
+
+        # GET /api/routes/<id>/
+        detail_resp = self.client.get(f'/api/routes/{self.route.id}/')
+        self.assertEqual(detail_resp.status_code, status.HTTP_200_OK)
+        detail_data = detail_resp.json()
+        self.assertIn('geometry', detail_data)
+        self.assertIn('polyline', detail_data)
+        self.assertIn('coordinates', detail_data)
+        self.assertTrue(len(detail_data['geometry']) >= 4)
+

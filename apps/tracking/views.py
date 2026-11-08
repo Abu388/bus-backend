@@ -196,7 +196,7 @@ class BusLocationView(APIView):
 #    Endpoint: GET /buses/<uuid:pk>/eta/
 # ============================================================================
 class BusETAView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [AllowAny]
 
     @extend_schema(
         tags=['Tracking'],
@@ -205,45 +205,89 @@ class BusETAView(APIView):
     )
     def get(self, request, pk):
         live_state = (
-            BusLiveState.objects.select_related('bus', 'trip', 'trip__route', 'next_fermata')
+            BusLiveState.objects.select_related('bus', 'bus__route', 'trip', 'trip__route', 'next_fermata')
             .filter(bus_id=pk)
             .first()
         )
 
-        if not live_state or not live_state.trip or live_state.trip.status != 'active':
-            raise NotFound("This bus does not have an active trip for ETA calculation.")
+        bus = None
+        if not live_state:
+            bus = PhysicalBus.objects.select_related('route').filter(id=pk).first()
+            if not bus:
+                raise NotFound("Bus not found.")
 
-        # 1. Check 10-second cache first so we don't recalculate on every passenger read
-        cache_key = f"trip_eta_{live_state.trip_id}"
+        # If live_state has no active trip, look up currently active trip for this bus
+        active_trip = None
+        if live_state:
+            if live_state.trip and getattr(live_state.trip, 'status', None) == 'active':
+                active_trip = live_state.trip
+            else:
+                active_trip = (
+                    Trip.objects.select_related('route', 'physical_bus')
+                    .filter(physical_bus_id=pk, status='active')
+                    .first()
+                )
+                if active_trip:
+                    live_state.trip = active_trip
+                    try:
+                        live_state.save(update_fields=['trip'])
+                    except Exception:
+                        pass
+        else:
+            active_trip = (
+                Trip.objects.select_related('route', 'physical_bus')
+                .filter(physical_bus_id=pk, status='active')
+                .first()
+            )
+
+        # Determine route, trip, and direction
+        if active_trip:
+            trip_id = active_trip.id
+            route = active_trip.route
+            direction = active_trip.direction
+        elif live_state and live_state.bus and live_state.bus.route:
+            trip_id = None
+            route = live_state.bus.route
+            direction = 'outbound'
+        elif bus and bus.route:
+            trip_id = None
+            route = bus.route
+            direction = 'outbound'
+        else:
+            raise NotFound("This bus does not have an active trip or assigned route for ETA calculation.")
+
+        # 1. Check 5-second cache
+        cache_key = f"trip_eta_{trip_id or pk}"
         cached_data = cache.get(cache_key)
         if cached_data:
             return Response(cached_data)
 
-        # 2. Determine speed (m/s): fallback to 5.5 m/s (~20 km/h) if 0/missing, minimum floor 2.0 m/s
-        if live_state.speed and live_state.speed > 0:
-            effective_speed = max(live_state.speed, 2.0)
+        # 2. Determine speed (m/s): if speed is 0 or very low (< 1.5 m/s), fall back to realistic 6.0 m/s (~21.6 km/h)
+        speed = live_state.speed if live_state else 0.0
+        if speed and speed >= 1.5:
+            effective_speed = speed
         else:
-            effective_speed = 5.5
+            effective_speed = 6.0
 
-        trip = live_state.trip
         route_dir = RouteDirection.objects.filter(
-            route=trip.route, direction=trip.direction
+            route=route, direction=direction
         ).first()
         stop_distances = (route_dir.stop_distances or {}) if route_dir else {}
 
         # 3. Get ordered stops for this trip's direction
         stops = list(
-            RouteStop.objects.filter(route=trip.route)
+            RouteStop.objects.filter(route=route)
             .select_related('fermata')
             .order_by('sequence_number')
         )
-        if trip.direction == 'inbound':
+        if direction == 'inbound':
             stops.reverse()
 
         # 4. Calculate cumulative distance to each stop and ETA for stops ahead of the bus
         upcoming_stops = []
         cumulative_m = 0.0
         dwell_time_per_stop_s = 20  # 20 seconds pause per intermediate stop
+        current_distance = live_state.distance_along_m if live_state else 0.0
 
         for idx, stop in enumerate(stops):
             if idx > 0:
@@ -253,38 +297,79 @@ class BusETAView(APIView):
                     prev_f.latitude, prev_f.longitude, curr_f.latitude, curr_f.longitude
                 )
 
-            # Use stored stop_distance if available, otherwise fallback to cumulative straight-line distance
             stop_dist_m = float(stop_distances.get(str(stop.fermata_id), cumulative_m))
 
-            # If this stop is ahead of the bus's current distance_along_m
-            if stop_dist_m > live_state.distance_along_m:
-                remaining_m = stop_dist_m - live_state.distance_along_m
+            # Include stops ahead of current progress
+            if stop_dist_m > current_distance:
+                remaining_m = max(stop_dist_m - current_distance, 50.0)
                 stops_between = len(upcoming_stops)
                 eta_seconds = int(
                     (remaining_m / effective_speed) + (stops_between * dwell_time_per_stop_s)
                 )
+                eta_minutes = round(eta_seconds / 60.0, 1)
+
                 upcoming_stops.append(
                     {
+                        "id": stop.fermata.id,
                         "fermata_id": stop.fermata.id,
-                        "fermata_name": stop.fermata.name,
+                        "name": stop.fermata.name,
                         "sequence_number": stop.sequence_number,
+                        "latitude": stop.fermata.latitude,
+                        "longitude": stop.fermata.longitude,
+                        "distance_m": round(remaining_m, 1),
                         "distance_remaining_m": round(remaining_m, 1),
                         "eta_seconds": eta_seconds,
+                        "eta_minutes": eta_minutes,
                     }
                 )
 
+        # If bus is at or past all stops, fallback to final stop
+        if not upcoming_stops and stops:
+            last_stop = stops[-1]
+            upcoming_stops.append(
+                {
+                    "id": last_stop.fermata.id,
+                    "fermata_id": last_stop.fermata.id,
+                    "name": last_stop.fermata.name,
+                    "sequence_number": last_stop.sequence_number,
+                    "latitude": last_stop.fermata.latitude,
+                    "longitude": last_stop.fermata.longitude,
+                    "distance_m": 0.0,
+                    "distance_remaining_m": 0.0,
+                    "eta_seconds": 0,
+                    "eta_minutes": 0.0,
+                }
+            )
+
+        # Next fermata object
+        if upcoming_stops:
+            first_stop = upcoming_stops[0]
+            next_fermata = {
+                "id": first_stop["id"],
+                "name": first_stop["name"],
+                "eta_seconds": first_stop["eta_seconds"],
+                "eta_minutes": first_stop["eta_minutes"],
+                "distance_remaining_m": first_stop["distance_remaining_m"],
+            }
+        else:
+            next_fermata = None
+
         result_data = {
-            "bus_id": live_state.bus_id,
-            "trip_id": trip.id,
-            "direction": trip.direction,
-            "distance_along_m": live_state.distance_along_m,
-            "next_fermata": (
-                live_state.next_fermata.name if live_state.next_fermata else None
-            ),
+            "bus_id": pk,
+            "trip_id": trip_id,
+            "route_id": route.id,
+            "public_bus_number": route.public_bus_number,
+            "route_name": route.name,
+            "direction": direction,
+            "distance_along_m": current_distance,
+            "speed": speed,
+            "effective_speed": effective_speed,
+            "next_fermata": next_fermata,
             "upcoming_stops": upcoming_stops,
+            "stops": upcoming_stops,
         }
 
-        # 5. Cache for 10 seconds per trip
-        cache.set(cache_key, result_data, timeout=10)
+        # 5. Cache for 5 seconds
+        cache.set(cache_key, result_data, timeout=5)
         return Response(result_data)
     

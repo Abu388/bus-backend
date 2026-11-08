@@ -5,7 +5,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from apps.fleet.models import PhysicalBus
-from apps.routes.models import Fermata, Route
+from apps.routes.models import Fermata, Route, RouteStop, RouteDirection
 from apps.tracking.models import BusLiveState
 from apps.tracking.serializers import BusLiveStateSerializer
 from apps.trips.models import Trip
@@ -47,6 +47,19 @@ class TrackingMetadataTestCase(TestCase):
             name='Megenagna Square',
             latitude=9.0210,
             longitude=38.8010,
+        )
+        self.fermata2 = Fermata.objects.create(
+            name='Tor Hailoch',
+            latitude=9.0050,
+            longitude=38.7200,
+        )
+        self.stop1 = RouteStop.objects.create(route=self.route, fermata=self.fermata, sequence_number=1)
+        self.stop2 = RouteStop.objects.create(route=self.route, fermata=self.fermata2, sequence_number=2)
+        self.direction = RouteDirection.objects.create(
+            route=self.route,
+            direction='outbound',
+            geometry=[[38.8010, 9.0210], [38.7200, 9.0050]],
+            stop_distances={str(self.fermata.id): 100.0, str(self.fermata2.id): 2500.0},
         )
         self.live_state = BusLiveState.objects.create(
             bus=self.bus,
@@ -132,6 +145,78 @@ class TrackingMetadataTestCase(TestCase):
         self.live_state.refresh_from_db()
         self.assertEqual(self.live_state.trip, self.trip)
 
+    def test_bus_eta_view_allow_any_and_response_structure(self):
+        # Unauthenticated request must succeed (AllowAny)
+        self.client.logout()
+        response = self.client.get(f'/api/buses/{self.bus.id}/eta/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+
+        self.assertEqual(data['bus_id'], str(self.bus.id))
+        self.assertEqual(data['trip_id'], str(self.trip.id))
+        self.assertEqual(data['route_id'], str(self.route.id))
+        self.assertEqual(data['public_bus_number'], 124)
+        self.assertEqual(data['route_name'], 'Megenagna - Tor Hailoch')
+        self.assertEqual(data['direction'], 'outbound')
+
+        # Check next_fermata structure
+        self.assertIsNotNone(data['next_fermata'])
+        self.assertIn('id', data['next_fermata'])
+        self.assertIn('name', data['next_fermata'])
+        self.assertIn('eta_seconds', data['next_fermata'])
+        self.assertIn('eta_minutes', data['next_fermata'])
+        self.assertIn('distance_remaining_m', data['next_fermata'])
+
+        # Check upcoming_stops & stops
+        self.assertIn('upcoming_stops', data)
+        self.assertIn('stops', data)
+        self.assertTrue(len(data['upcoming_stops']) > 0)
+        first_stop = data['upcoming_stops'][0]
+        self.assertIn('fermata_id', first_stop)
+        self.assertIn('id', first_stop)
+        self.assertIn('name', first_stop)
+        self.assertIn('sequence_number', first_stop)
+        self.assertIn('latitude', first_stop)
+        self.assertIn('longitude', first_stop)
+        self.assertIn('distance_m', first_stop)
+        self.assertIn('eta_seconds', first_stop)
+        self.assertIn('eta_minutes', first_stop)
+
+    def test_bus_eta_view_low_speed_fallback_to_6mps(self):
+        # When speed is very low (< 1.5 m/s), effective_speed must be 6.0 m/s
+        self.live_state.speed = 0.5
+        self.live_state.save()
+
+        response = self.client.get(f'/api/buses/{self.bus.id}/eta/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        self.assertEqual(data['effective_speed'], 6.0)
+
+    def test_bus_eta_view_relinks_active_trip_if_none(self):
+        self.live_state.trip = None
+        self.live_state.save()
+
+        response = self.client.get(f'/api/buses/{self.bus.id}/eta/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        self.assertEqual(data['trip_id'], str(self.trip.id))
+
+    def test_bus_eta_view_fallback_to_bus_route_when_no_active_trip(self):
+        self.trip.status = Trip.Status.ENDED
+        self.trip.ended_at = timezone.now()
+        self.trip.save()
+        self.live_state.trip = None
+        self.live_state.save()
+
+        response = self.client.get(f'/api/buses/{self.bus.id}/eta/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        self.assertIsNone(data['trip_id'])
+        self.assertEqual(data['route_id'], str(self.route.id))
+        self.assertEqual(data['public_bus_number'], 124)
+        self.assertEqual(data['direction'], 'outbound')
+
+
     def test_location_get_relinks_active_trip_if_trip_was_none(self):
         self.live_state.trip = None
         self.live_state.save()
@@ -145,3 +230,4 @@ class TrackingMetadataTestCase(TestCase):
 
         self.live_state.refresh_from_db()
         self.assertEqual(self.live_state.trip, self.trip)
+
