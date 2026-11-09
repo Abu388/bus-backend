@@ -29,6 +29,7 @@ class Payment(BaseModel):
         on_delete=models.PROTECT,
         related_name='payments',
     )
+    passenger_count = models.PositiveSmallIntegerField(default=1)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     status = models.CharField(
         max_length=50,
@@ -59,18 +60,6 @@ class Payment(BaseModel):
             models.UniqueConstraint(
                 fields=['passenger', 'idempotency_key'],
                 name='unique_passenger_idempotency_key',
-            ),
-            # 4. Only one pending payment per passenger per trip
-            models.UniqueConstraint(
-                fields=['trip', 'passenger'],
-                condition=Q(status='pending'),
-                name='unique_pending_payment_per_passenger_trip',
-            ),
-            # 5. Only one succeeded payment per passenger per trip
-            models.UniqueConstraint(
-                fields=['trip', 'passenger'],
-                condition=Q(status='succeeded'),
-                name='unique_succeeded_payment_per_passenger_trip',
             ),
         ]
         indexes = [

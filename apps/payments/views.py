@@ -85,6 +85,8 @@ def _ensure_payment_succeeded_and_ticket_issued(payment: Payment, actor=None) ->
                     'trip_id': str(payment.trip_id),
                     'provider': payment.provider,
                     'provider_ref': payment.provider_ref,
+                    'passenger_count': getattr(payment, 'passenger_count', 1) or 1,
+                    'unit_fare': str(payment.fare.amount) if hasattr(payment, 'fare') and payment.fare else str(payment.amount),
                 },
             )
         except Exception:
@@ -158,6 +160,7 @@ class InitiatePaymentView(APIView):
         serializer = PaymentInitiateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         token = serializer.validated_data['token'].strip()
+        passenger_count = serializer.validated_data.get('passenger_count', 1)
 
         # 2. Extract Idempotency-Key from HTTP header (or request body fallback for easy testing)
         idempotency_key = (
@@ -210,24 +213,10 @@ class InitiatePaymentView(APIView):
         if not active_fare:
             raise ValidationError({"fare": "No active fare is configured for this route."})
 
-        # 6. Check if passenger already has a payment on this trip (scan refresh / rescan resilience)
-        existing_trip_payment = (
-            Payment.objects.filter(
-                trip=trip,
-                passenger=request.user,
-                status__in=[Payment.Status.PENDING, Payment.Status.SUCCEEDED],
-            )
-            .select_related('trip', 'trip__route', 'fare', 'passenger')
-            .first()
-        )
-        if existing_trip_payment:
-            payment = _ensure_payment_succeeded_and_ticket_issued(existing_trip_payment, actor=request.user)
-            return Response(
-                PaymentSerializer(payment).data,
-                status=status.HTTP_200_OK,
-            )
+        # Calculate total amount based on passenger count
+        total_amount = active_fare.amount * passenger_count
 
-        # 7. Create the succeeded payment and issue ticket inside an atomic transaction (Instant Demo Confirmation)
+        # 6. Create the succeeded payment and issue ticket inside an atomic transaction (Instant Demo Confirmation)
         provider_name = getattr(settings, 'PAYMENT_PROVIDER', 'mock')
         provider_ref = f"MOCK-{uuid.uuid4().hex[:12].upper()}"
 
@@ -237,7 +226,8 @@ class InitiatePaymentView(APIView):
                     trip=trip,
                     passenger=request.user,
                     fare=active_fare,
-                    amount=active_fare.amount,  # Copies exact price at payment time
+                    passenger_count=passenger_count,
+                    amount=total_amount,
                     status=Payment.Status.SUCCEEDED,
                     paid_at=now,
                     provider=provider_name,
@@ -256,6 +246,8 @@ class InitiatePaymentView(APIView):
                             'trip_id': str(trip.id),
                             'fare_id': str(active_fare.id),
                             'idempotency_key': idempotency_key,
+                            'passenger_count': passenger_count,
+                            'unit_fare': str(active_fare.amount),
                         },
                     )
                     record(
@@ -268,6 +260,8 @@ class InitiatePaymentView(APIView):
                             'trip_id': str(trip.id),
                             'provider': provider_name,
                             'provider_ref': provider_ref,
+                            'passenger_count': passenger_count,
+                            'unit_fare': str(active_fare.amount),
                         },
                     )
                 except Exception:
@@ -284,13 +278,6 @@ class InitiatePaymentView(APIView):
                 )
                 .select_related('trip', 'trip__route', 'fare', 'passenger')
                 .first()
-                or Payment.objects.filter(
-                    trip=trip,
-                    passenger=request.user,
-                    status__in=[Payment.Status.PENDING, Payment.Status.SUCCEEDED],
-                )
-                .select_related('trip', 'trip__route', 'fare', 'passenger')
-                .first()
             )
             if retry_payment:
                 payment = _ensure_payment_succeeded_and_ticket_issued(retry_payment, actor=request.user)
@@ -299,7 +286,7 @@ class InitiatePaymentView(APIView):
                     status=status.HTTP_200_OK,
                 )
             raise ValidationError(
-                {"detail": "Conflict: You already have a pending or succeeded payment for this trip."}
+                {"detail": "Conflict: Unable to process payment with this idempotency key."}
             )
 
         return Response(

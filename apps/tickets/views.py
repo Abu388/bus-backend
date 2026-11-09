@@ -52,7 +52,7 @@ class TicketListView(generics.ListAPIView):
 
     def get_queryset(self):
         return (
-            Ticket.objects.select_related('payment', 'trip', 'trip__route')
+            Ticket.objects.select_related('payment', 'payment__fare', 'trip', 'trip__route')
             .prefetch_related('scans')
             .filter(passenger=self.request.user)
             .order_by('-issued_at')
@@ -75,7 +75,7 @@ class TicketDetailView(generics.RetrieveAPIView):
 
     def get_object(self):
         ticket = get_object_or_404(
-            Ticket.objects.select_related('payment', 'trip', 'trip__route', 'passenger')
+            Ticket.objects.select_related('payment', 'payment__fare', 'trip', 'trip__route', 'passenger')
             .prefetch_related('scans'),
             pk=self.kwargs['pk'],
         )
@@ -98,18 +98,22 @@ class TicketRotatingCodeView(APIView):
     )
     def get(self, request, pk):
         ticket = get_object_or_404(
-            Ticket.objects.select_related('trip', 'passenger').prefetch_related('scans'),
+            Ticket.objects.select_related('payment', 'trip', 'passenger').prefetch_related('scans'),
             pk=pk,
         )
         if ticket.passenger != request.user and getattr(request.user, 'role', None) != 'admin':
             raise PermissionDenied("You can only generate a scan code for your own ticket.")
 
+        ticket_amount = str(ticket.payment.amount) if hasattr(ticket, 'payment') and ticket.payment else "0.00"
         computed_status = ticket.get_computed_status()
         if computed_status in ('used', 'expired'):
             return Response(
                 {
                     "ticket_id": ticket.id,
                     "code": ticket.code,
+                    "passenger_count": ticket.passenger_count,
+                    "quantity": ticket.passenger_count,
+                    "amount": ticket_amount,
                     "token": None,
                     "rotating_token": None,
                     "valid_for_seconds": 0,
@@ -123,6 +127,9 @@ class TicketRotatingCodeView(APIView):
         data = generate_rotating_ticket_token(ticket)
         data["rotating_token"] = data.get("token")
         data["status"] = computed_status
+        data["passenger_count"] = ticket.passenger_count
+        data["quantity"] = ticket.passenger_count
+        data["amount"] = ticket_amount
         return Response(data, status=status.HTTP_200_OK)
 
 
@@ -162,7 +169,7 @@ class TicketValidateView(APIView):
         ticket = None
         if ticket_id:
             ticket = (
-                Ticket.objects.select_related('trip', 'passenger')
+                Ticket.objects.select_related('payment', 'trip', 'passenger')
                 .filter(id=ticket_id)
                 .first()
             )
@@ -182,10 +189,15 @@ class TicketValidateView(APIView):
                     "result": TicketScan.Result.INVALID,
                     "ticket_code": None,
                     "passenger_masked": None,
+                    "passenger_count": None,
+                    "quantity": None,
+                    "amount": None,
                     "detail": "Invalid or expired rotating QR code.",
                 },
                 status=status.HTTP_200_OK,
             )
+
+        ticket_amount = str(ticket.payment.amount) if hasattr(ticket, 'payment') and ticket.payment else "0.00"
 
         #    (b) Ticket belongs to the casher's current active trip -> else 'wrong_trip'
         if not active_trip or ticket.trip_id != active_trip.id:
@@ -201,6 +213,9 @@ class TicketValidateView(APIView):
                     "result": TicketScan.Result.WRONG_TRIP,
                     "ticket_code": ticket.code,
                     "passenger_masked": mask_passenger_name(ticket.passenger),
+                    "passenger_count": ticket.passenger_count,
+                    "quantity": ticket.passenger_count,
+                    "amount": ticket_amount,
                     "detail": "This ticket belongs to a different trip or bus.",
                 },
                 status=status.HTTP_200_OK,
@@ -221,6 +236,9 @@ class TicketValidateView(APIView):
                     "result": TicketScan.Result.INVALID,
                     "ticket_code": ticket.code,
                     "passenger_masked": mask_passenger_name(ticket.passenger),
+                    "passenger_count": ticket.passenger_count,
+                    "quantity": ticket.passenger_count,
+                    "amount": ticket_amount,
                     "detail": "This ticket has already been used.",
                 },
                 status=status.HTTP_200_OK,
@@ -251,6 +269,7 @@ class TicketValidateView(APIView):
                         'code': ticket.code,
                         'trip_id': str(active_trip.id) if active_trip else str(ticket.trip_id),
                         'passenger_id': str(ticket.passenger_id),
+                        'passenger_count': ticket.passenger_count,
                     },
                 )
             except Exception:
@@ -261,6 +280,9 @@ class TicketValidateView(APIView):
                 "result": scan_result,
                 "ticket_code": ticket.code,
                 "passenger_masked": mask_passenger_name(ticket.passenger),
+                "passenger_count": ticket.passenger_count,
+                "quantity": ticket.passenger_count,
+                "amount": ticket_amount,
                 "detail": "Ticket is valid." if scan_result == 'valid' else "Ticket has expired.",
             },
             status=status.HTTP_200_OK,

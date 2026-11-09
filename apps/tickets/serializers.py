@@ -7,6 +7,11 @@ class TicketSerializer(serializers.ModelSerializer):
     amount = serializers.DecimalField(
         source='payment.amount', max_digits=10, decimal_places=2, read_only=True
     )
+    passenger_count = serializers.IntegerField(read_only=True)
+    quantity = serializers.IntegerField(source='passenger_count', read_only=True)
+    unit_fare = serializers.DecimalField(
+        source='payment.fare.amount', max_digits=10, decimal_places=2, read_only=True
+    )
     route_name = serializers.CharField(source='trip.route.name', read_only=True)
     public_bus_number = serializers.IntegerField(
         source='trip.route.public_bus_number', read_only=True
@@ -21,6 +26,9 @@ class TicketSerializer(serializers.ModelSerializer):
             'payment',
             'passenger',
             'trip',
+            'passenger_count',
+            'quantity',
+            'unit_fare',
             'code',
             'issued_at',
             'expires_at',

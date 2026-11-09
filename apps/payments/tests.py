@@ -199,26 +199,168 @@ class InstantPaymentTestCase(TestCase):
         self.assertEqual(pending_payment.status, Payment.Status.SUCCEEDED)
         self.assertTrue(Ticket.objects.filter(payment=pending_payment).exists())
 
-    def test_rescan_same_trip_with_different_idempotency_key_self_heals(self):
+    def test_buy_second_ticket_on_same_trip_with_new_idempotency_key(self):
+        """
+        Verifies that a passenger can buy a second (additional) ticket on the same trip
+        by sending a new idempotency key.
+        """
         self.client.force_authenticate(user=self.passenger)
-        # First scan
+        # 1. First purchase on trip
         resp1 = self.client.post(
             '/api/payments/initiate/',
-            {'token': self.qr_token, 'idempotency_key': 'key-scan-1'},
+            {'token': self.qr_token, 'idempotency_key': 'key-first-ticket', 'passenger_count': 1},
             format='json',
         )
         self.assertEqual(resp1.status_code, status.HTTP_201_CREATED)
+        data1 = resp1.json()
 
-        # Passenger rescans or refreshes with a different key
+        # 2. Second purchase on the same trip with a NEW idempotency key
         resp2 = self.client.post(
             '/api/payments/initiate/',
-            {'token': self.qr_token, 'idempotency_key': 'key-scan-2'},
+            {'token': self.qr_token, 'idempotency_key': 'key-second-ticket', 'passenger_count': 2},
             format='json',
         )
-        # Must return 200 OK with the existing payment and ticket instead of 400 Conflict!
-        self.assertEqual(resp2.status_code, status.HTTP_200_OK)
-        self.assertEqual(resp2.json()['id'], resp1.json()['id'])
-        self.assertEqual(resp2.json()['ticket_id'], resp1.json()['ticket_id'])
+        self.assertEqual(resp2.status_code, status.HTTP_201_CREATED)
+        data2 = resp2.json()
+
+        # Both payments and tickets must exist and be distinct
+        self.assertNotEqual(data1['id'], data2['id'])
+        self.assertNotEqual(data1['ticket_id'], data2['ticket_id'])
+        self.assertEqual(data1['passenger_count'], 1)
+        self.assertEqual(data2['passenger_count'], 2)
+        self.assertEqual(Decimal(str(data1['amount'])), Decimal('15.00'))
+        self.assertEqual(Decimal(str(data2['amount'])), Decimal('30.00'))
+
+        # Retrying the first key returns the first payment
+        retry1 = self.client.post(
+            '/api/payments/initiate/',
+            {'token': self.qr_token, 'idempotency_key': 'key-first-ticket'},
+            format='json',
+        )
+        self.assertEqual(retry1.status_code, status.HTTP_200_OK)
+        self.assertEqual(retry1.json()['id'], data1['id'])
+
+        # Retrying the second key returns the second payment
+        retry2 = self.client.post(
+            '/api/payments/initiate/',
+            {'token': self.qr_token, 'idempotency_key': 'key-second-ticket'},
+            format='json',
+        )
+        self.assertEqual(retry2.status_code, status.HTTP_200_OK)
+        self.assertEqual(retry2.json()['id'], data2['id'])
+
+        # Both tickets must be linked to the passenger and trip in DB
+        self.assertEqual(Ticket.objects.filter(passenger=self.passenger, trip=self.trip).count(), 2)
+
+    def test_multi_passenger_payment_passenger_count_six(self):
+        """
+        Paying for passenger_count=6 on a 15.00 ETB route:
+        - payment.amount == 90.00
+        - payment.passenger_count == 6
+        - ticket.passenger_count == 6
+        - POST /api/tickets/validate/ returns passenger_count: 6
+        """
+        self.client.force_authenticate(user=self.passenger)
+        resp = self.client.post(
+            '/api/payments/initiate/',
+            {
+                'token': self.qr_token,
+                'idempotency_key': 'idem-multi-6',
+                'passenger_count': 6,
+            },
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        data = resp.json()
+
+        # Verify payment payload & fields
+        self.assertEqual(Decimal(str(data['amount'])), Decimal('90.00'))
+        self.assertEqual(data['passenger_count'], 6)
+        self.assertEqual(data['quantity'], 6)
+        self.assertEqual(Decimal(str(data['unit_fare'])), Decimal('15.00'))
+
+        # Verify Payment in DB
+        payment = Payment.objects.get(id=data['id'])
+        self.assertEqual(payment.amount, Decimal('90.00'))
+        self.assertEqual(payment.passenger_count, 6)
+
+        # Verify Ticket in DB
+        ticket = Ticket.objects.get(payment=payment)
+        self.assertEqual(ticket.passenger_count, 6)
+        self.assertEqual(data['ticket']['passenger_count'], 6)
+        self.assertEqual(data['ticket']['quantity'], 6)
+        self.assertEqual(Decimal(str(data['ticket']['unit_fare'])), Decimal('15.00'))
+        self.assertEqual(Decimal(str(data['ticket']['amount'])), Decimal('90.00'))
+
+        # Verify AuditLog entries include passenger_count
+        pay_init_log = AuditLog.objects.filter(
+            action=AuditLog.Action.PAYMENT_INITIATED, entity_id=str(payment.id)
+        ).first()
+        self.assertIsNotNone(pay_init_log)
+        self.assertEqual(pay_init_log.metadata.get('passenger_count'), 6)
+        self.assertEqual(pay_init_log.metadata.get('unit_fare'), '15.00')
+
+        pay_succ_log = AuditLog.objects.filter(
+            action=AuditLog.Action.PAYMENT_SUCCEEDED, entity_id=str(payment.id)
+        ).first()
+        self.assertIsNotNone(pay_succ_log)
+        self.assertEqual(pay_succ_log.metadata.get('passenger_count'), 6)
+        self.assertEqual(pay_succ_log.metadata.get('unit_fare'), '15.00')
+
+        ticket_issued_log = AuditLog.objects.filter(
+            action=AuditLog.Action.TICKET_ISSUED, entity_id=str(ticket.id)
+        ).first()
+        self.assertIsNotNone(ticket_issued_log)
+        self.assertEqual(ticket_issued_log.metadata.get('passenger_count'), 6)
+
+        # Verify rotating code endpoint exposes passenger_count and quantity
+        code_resp = self.client.get(f'/api/tickets/{ticket.id}/code/')
+        self.assertEqual(code_resp.status_code, status.HTTP_200_OK)
+        code_data = code_resp.json()
+        self.assertEqual(code_data['passenger_count'], 6)
+        self.assertEqual(code_data['quantity'], 6)
+        self.assertEqual(Decimal(str(code_data['amount'])), Decimal('90.00'))
+
+        # Casher validates the ticket via POST /api/tickets/validate/
+        self.client.force_authenticate(user=self.casher)
+        val_resp = self.client.post(
+            '/api/tickets/validate/',
+            {'token': code_data['token']},
+            format='json',
+        )
+        self.assertEqual(val_resp.status_code, status.HTTP_200_OK)
+        val_data = val_resp.json()
+        self.assertEqual(val_data['result'], 'valid')
+        self.assertEqual(val_data['passenger_count'], 6)
+        self.assertEqual(val_data['quantity'], 6)
+        self.assertEqual(Decimal(str(val_data['amount'])), Decimal('90.00'))
+
+        # Verify TICKET_VALIDATED audit log
+        ticket_val_log = AuditLog.objects.filter(
+            action=AuditLog.Action.TICKET_VALIDATED, entity_id=str(ticket.id)
+        ).first()
+        self.assertIsNotNone(ticket_val_log)
+        self.assertEqual(ticket_val_log.metadata.get('passenger_count'), 6)
+
+    def test_quantity_alias_resolution_in_initiate_payment(self):
+        """
+        Verify that passing 'quantity' instead of 'passenger_count' works identically.
+        """
+        self.client.force_authenticate(user=self.passenger)
+        resp = self.client.post(
+            '/api/payments/initiate/',
+            {
+                'token': self.qr_token,
+                'idempotency_key': 'idem-quantity-4',
+                'quantity': 4,
+            },
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        data = resp.json()
+        self.assertEqual(data['passenger_count'], 4)
+        self.assertEqual(data['quantity'], 4)
+        self.assertEqual(Decimal(str(data['amount'])), Decimal('60.00'))
 
     def test_payments_list_endpoint_and_self_healing(self):
         # Create a pending payment

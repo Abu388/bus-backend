@@ -99,6 +99,21 @@ DATABASES = {
     }
 }
 
+import sys
+if "test" in sys.argv and not env.str("TEST_DATABASE_URL", default=""):
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": ":memory:",
+        }
+    }
+elif "test" in sys.argv and env.str("TEST_DATABASE_URL", default=""):
+    DATABASES = {
+        "default": {
+            **env.db("TEST_DATABASE_URL"),
+        }
+    }
+
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [

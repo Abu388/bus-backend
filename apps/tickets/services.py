@@ -34,10 +34,13 @@ def issue_ticket_for_payment(payment) -> Ticket:
     max_hours = getattr(settings, 'TICKET_MAX_DURATION_HOURS', 3)
     expires_at = now + timedelta(hours=max_hours)
 
+    passenger_count = getattr(payment, 'passenger_count', 1) or 1
+
     ticket = Ticket.objects.create(
         payment=payment,
         passenger=payment.passenger,
         trip=payment.trip,
+        passenger_count=passenger_count,
         code=generate_short_code(),
         issued_at=now,
         expires_at=expires_at,
@@ -52,6 +55,7 @@ def issue_ticket_for_payment(payment) -> Ticket:
                 'code': ticket.code,
                 'trip_id': str(payment.trip_id),
                 'payment_id': str(payment.id),
+                'passenger_count': ticket.passenger_count,
             },
         )
     except Exception:
@@ -66,9 +70,14 @@ def generate_rotating_ticket_token(ticket: Ticket) -> dict:
     """
     signer = signing.TimestampSigner(salt=TICKET_SIGNER_SALT)
     signed_token = signer.sign(str(ticket.id))
+    passenger_count = getattr(ticket, 'passenger_count', 1) or 1
+    amount_str = str(ticket.payment.amount) if hasattr(ticket, 'payment') and ticket.payment else None
     return {
         "ticket_id": ticket.id,
         "code": ticket.code,
+        "passenger_count": passenger_count,
+        "quantity": passenger_count,
+        "amount": amount_str,
         "token": signed_token,
         "valid_for_seconds": ROTATING_CODE_MAX_AGE_SECONDS,
         "expires_at": timezone.now() + timedelta(seconds=ROTATING_CODE_MAX_AGE_SECONDS),

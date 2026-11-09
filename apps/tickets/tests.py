@@ -169,3 +169,70 @@ class TicketValidationStatusTestCase(TestCase):
         self.assertEqual(resp2.status_code, status.HTTP_200_OK)
         self.assertEqual(resp2.json()['result'], 'invalid')
         self.assertIn('already been used', resp2.json()['detail'])
+
+    def test_multi_passenger_ticket_validation_and_audit(self):
+        """
+        Verify multi-passenger ticket serialization, rotating token generation,
+        and casher validation response with passenger_count=6.
+        """
+        pay6 = Payment.objects.create(
+            trip=self.trip,
+            passenger=self.passenger,
+            fare=self.fare,
+            passenger_count=6,
+            amount=Decimal('72.00'),
+            status=Payment.Status.SUCCEEDED,
+            paid_at=timezone.now(),
+            provider='mock',
+            provider_ref='MOCK-MULTI-6',
+            idempotency_key='test-multi-key-6',
+            expires_at=timezone.now() + timedelta(minutes=10),
+        )
+        ticket6 = Ticket.objects.create(
+            payment=pay6,
+            passenger=self.passenger,
+            trip=self.trip,
+            passenger_count=6,
+            code='T600',
+            issued_at=timezone.now(),
+            expires_at=timezone.now() + timedelta(hours=3),
+        )
+
+        # 1. TicketSerializer verification
+        serializer = TicketSerializer(ticket6)
+        data = serializer.data
+        self.assertEqual(data['passenger_count'], 6)
+        self.assertEqual(data['quantity'], 6)
+        self.assertEqual(Decimal(str(data['unit_fare'])), Decimal('12.00'))
+        self.assertEqual(Decimal(str(data['amount'])), Decimal('72.00'))
+
+        # 2. Rotating code response verification
+        self.client.force_authenticate(user=self.passenger)
+        code_resp = self.client.get(f'/api/tickets/{ticket6.id}/code/')
+        self.assertEqual(code_resp.status_code, status.HTTP_200_OK)
+        code_data = code_resp.json()
+        self.assertEqual(code_data['passenger_count'], 6)
+        self.assertEqual(code_data['quantity'], 6)
+        self.assertEqual(Decimal(str(code_data['amount'])), Decimal('72.00'))
+
+        # 3. Casher validation verification
+        self.client.force_authenticate(user=self.casher)
+        val_resp = self.client.post(
+            '/api/tickets/validate/',
+            {'token': code_data['token']},
+            format='json',
+        )
+        self.assertEqual(val_resp.status_code, status.HTTP_200_OK)
+        val_data = val_resp.json()
+        self.assertEqual(val_data['result'], 'valid')
+        self.assertEqual(val_data['passenger_count'], 6)
+        self.assertEqual(val_data['quantity'], 6)
+        self.assertEqual(Decimal(str(val_data['amount'])), Decimal('72.00'))
+
+        # 4. AuditLog verification
+        audit_entry = AuditLog.objects.filter(
+            action=AuditLog.Action.TICKET_VALIDATED,
+            entity_id=str(ticket6.id),
+        ).first()
+        self.assertIsNotNone(audit_entry)
+        self.assertEqual(audit_entry.metadata.get('passenger_count'), 6)

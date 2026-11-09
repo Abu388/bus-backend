@@ -13,6 +13,15 @@ class PaymentInitiateSerializer(serializers.Serializer):
     idempotency_key = serializers.CharField(
         max_length=128, required=False, allow_blank=False
     )
+    passenger_count = serializers.IntegerField(min_value=1, max_value=50, required=False, default=1)
+    quantity = serializers.IntegerField(min_value=1, max_value=50, required=False)
+
+    def validate(self, attrs):
+        if 'quantity' in self.initial_data and 'passenger_count' not in self.initial_data:
+            attrs['passenger_count'] = attrs.get('quantity') or 1
+        else:
+            attrs['passenger_count'] = attrs.get('passenger_count') or attrs.get('quantity') or 1
+        return attrs
 
 
 class PaymentSerializer(serializers.ModelSerializer):
@@ -26,6 +35,11 @@ class PaymentSerializer(serializers.ModelSerializer):
     public_bus_number = serializers.IntegerField(
         source='trip.route.public_bus_number', read_only=True, allow_null=True
     )
+    passenger_count = serializers.IntegerField(read_only=True)
+    quantity = serializers.IntegerField(source='passenger_count', read_only=True)
+    unit_fare = serializers.DecimalField(
+        source='fare.amount', max_digits=10, decimal_places=2, read_only=True
+    )
 
     class Meta:
         model = Payment
@@ -35,6 +49,9 @@ class PaymentSerializer(serializers.ModelSerializer):
             'passenger',
             'fare',
             'amount',
+            'passenger_count',
+            'quantity',
+            'unit_fare',
             'status',
             'provider',
             'provider_ref',
@@ -57,12 +74,16 @@ class CasherTripPaymentSerializer(serializers.ModelSerializer):
     Shows only succeeded payment details and masks the passenger's identity.
     """
     passenger_masked = serializers.SerializerMethodField()
+    passenger_count = serializers.IntegerField(read_only=True)
+    quantity = serializers.IntegerField(source='passenger_count', read_only=True)
 
     class Meta:
         model = Payment
         fields = [
             'id',
             'amount',
+            'passenger_count',
+            'quantity',
             'paid_at',
             'passenger_masked',
             'provider_ref',

@@ -24,6 +24,7 @@ class Ticket(BaseModel):
         on_delete=models.PROTECT,
         related_name='tickets',
     )
+    passenger_count = models.PositiveSmallIntegerField(default=1)
     code = models.CharField(max_length=20)
     issued_at = models.DateTimeField()
     expires_at = models.DateTimeField()

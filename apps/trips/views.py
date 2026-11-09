@@ -434,6 +434,7 @@ class TripQRScanView(APIView):
 
         # 4. Look up the current active fare for this route
         active_fare = Fare.objects.filter(route=route, effective_to__isnull=True).first()
+        fare_val = str(active_fare.amount) if active_fare else None
 
         # 5. Return ONLY passenger-safe summary fields (NO casher identity, NO bus targa!)
         return Response(
@@ -443,7 +444,10 @@ class TripQRScanView(APIView):
                 "public_bus_number": route.public_bus_number,
                 "route_name": route.name,
                 "direction": trip.direction,
-                "current_fare": str(active_fare.amount) if active_fare else None,
+                "current_fare": fare_val,
+                "fare_amount": fare_val,
+                "amount": fare_val,
+                "unit_fare": fare_val,
             },
             status=status.HTTP_200_OK,
         )
