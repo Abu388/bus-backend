@@ -11,6 +11,6 @@ urlpatterns = [
     # GET /tickets/<id>/ (Single ticket detail)
     path('tickets/<uuid:pk>/', views.TicketDetailView.as_view(), name='ticket-detail'),
 
-    # GET /tickets/<id>/code/ (Fresh 60s rotating signed code)
+    # GET /tickets/<id>/code/ (12-hour signed code)
     path('tickets/<uuid:pk>/code/', views.TicketRotatingCodeView.as_view(), name='ticket-rotating-code'),
 ]

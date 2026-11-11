@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from apps.tickets.models import Ticket, TicketScan
+from apps.tickets.services import generate_ticket_qr_token
 
 
 class TicketSerializer(serializers.ModelSerializer):
@@ -18,6 +19,8 @@ class TicketSerializer(serializers.ModelSerializer):
     )
     validated_at = serializers.SerializerMethodField()
     used_at = serializers.SerializerMethodField()
+    qr_token = serializers.SerializerMethodField()
+    token = serializers.SerializerMethodField()
 
     class Meta:
         model = Ticket
@@ -38,6 +41,8 @@ class TicketSerializer(serializers.ModelSerializer):
             'public_bus_number',
             'validated_at',
             'used_at',
+            'qr_token',
+            'token',
         ]
         read_only_fields = fields
 
@@ -70,6 +75,16 @@ class TicketSerializer(serializers.ModelSerializer):
         if self.get_validated_at(obj) is not None:
             return 'used'
         return obj.get_computed_status()
+
+    def get_qr_token(self, obj) -> str | None:
+        if self.get_status(obj) != 'valid':
+            return None
+        if not hasattr(obj, '_cached_qr_token'):
+            obj._cached_qr_token = generate_ticket_qr_token(obj)
+        return obj._cached_qr_token
+
+    def get_token(self, obj) -> str | None:
+        return self.get_qr_token(obj)
 
 
 class TicketValidateInputSerializer(serializers.Serializer):

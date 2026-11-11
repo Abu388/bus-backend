@@ -11,7 +11,7 @@ from apps.audit.services import record
 from apps.tickets.models import Ticket
 
 TICKET_SIGNER_SALT = 'bus-ticket-rotating-qr-v1'
-ROTATING_CODE_MAX_AGE_SECONDS = 60  # Rotating QR code expires after 60 seconds
+ROTATING_CODE_MAX_AGE_SECONDS = 43200  # 12 hours (12 * 3600 seconds)
 
 
 def generate_short_code() -> str:
@@ -31,7 +31,7 @@ def issue_ticket_for_payment(payment) -> Ticket:
         return existing
 
     now = timezone.now()
-    max_hours = getattr(settings, 'TICKET_MAX_DURATION_HOURS', 3)
+    max_hours = getattr(settings, 'TICKET_MAX_DURATION_HOURS', 12)
     expires_at = now + timedelta(hours=max_hours)
 
     passenger_count = getattr(payment, 'passenger_count', 1) or 1
@@ -64,14 +64,27 @@ def issue_ticket_for_payment(payment) -> Ticket:
     return ticket
 
 
-def generate_rotating_ticket_token(ticket: Ticket) -> dict:
+def generate_ticket_qr_token(ticket: Ticket) -> str:
     """
-    Signs the ticket UUID with a current timestamp so screenshots die after 60 seconds.
+    Signs the ticket UUID with a timestamp valid for 12 hours.
     """
     signer = signing.TimestampSigner(salt=TICKET_SIGNER_SALT)
-    signed_token = signer.sign(str(ticket.id))
+    return signer.sign(str(ticket.id))
+
+
+def generate_rotating_ticket_token(ticket: Ticket) -> dict:
+    """
+    Signs the ticket UUID with a timestamp. The QR token remains valid for 12 hours
+    or until validated by a casher.
+    """
+    signed_token = generate_ticket_qr_token(ticket)
     passenger_count = getattr(ticket, 'passenger_count', 1) or 1
     amount_str = str(ticket.payment.amount) if hasattr(ticket, 'payment') and ticket.payment else None
+    remaining_seconds = (
+        max(0, int((ticket.expires_at - timezone.now()).total_seconds()))
+        if ticket.expires_at
+        else ROTATING_CODE_MAX_AGE_SECONDS
+    )
     return {
         "ticket_id": ticket.id,
         "code": ticket.code,
@@ -79,14 +92,14 @@ def generate_rotating_ticket_token(ticket: Ticket) -> dict:
         "quantity": passenger_count,
         "amount": amount_str,
         "token": signed_token,
-        "valid_for_seconds": ROTATING_CODE_MAX_AGE_SECONDS,
-        "expires_at": timezone.now() + timedelta(seconds=ROTATING_CODE_MAX_AGE_SECONDS),
+        "valid_for_seconds": remaining_seconds,
+        "expires_at": ticket.expires_at,
     }
 
 
 def verify_rotating_ticket_token(token: str) -> str | None:
     """
-    Verifies the signed rotating token and checks that it is not older than 60 seconds.
+    Verifies the signed rotating token and checks that it is not older than 12 hours (43200 seconds).
     Returns the ticket UUID string if valid, or None if tampered/expired.
     """
     signer = signing.TimestampSigner(salt=TICKET_SIGNER_SALT)

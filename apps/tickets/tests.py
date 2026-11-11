@@ -14,7 +14,7 @@ from apps.payments.models import Payment
 from apps.routes.models import Route
 from apps.tickets.models import Ticket, TicketScan
 from apps.tickets.serializers import TicketSerializer
-from apps.tickets.services import generate_rotating_ticket_token
+from apps.tickets.services import generate_rotating_ticket_token, issue_ticket_for_payment
 from apps.trips.models import Trip
 
 User = get_user_model()
@@ -81,7 +81,7 @@ class TicketValidationStatusTestCase(TestCase):
             trip=self.trip,
             code='T100',
             issued_at=timezone.now(),
-            expires_at=timezone.now() + timedelta(hours=3),
+            expires_at=timezone.now() + timedelta(hours=12),
         )
 
     def test_unscanned_ticket_status_is_valid(self):
@@ -90,6 +90,9 @@ class TicketValidationStatusTestCase(TestCase):
         self.assertEqual(data['status'], 'valid')
         self.assertIsNone(data['validated_at'])
         self.assertIsNone(data['used_at'])
+        self.assertIsNotNone(data['qr_token'])
+        self.assertIsNotNone(data['token'])
+        self.assertEqual(data['qr_token'], data['token'])
 
     def test_scanned_ticket_returns_used_status_and_timestamps(self):
         # 1. Generate rotating QR token for passenger
@@ -115,6 +118,8 @@ class TicketValidationStatusTestCase(TestCase):
         self.assertIsNotNone(data['validated_at'])
         self.assertIsNotNone(data['used_at'])
         self.assertEqual(data['validated_at'], data['used_at'])
+        self.assertIsNone(data['qr_token'])
+        self.assertIsNone(data['token'])
 
         # 4. Check GET /api/tickets/ (Passenger list) returns status "used"
         self.client.force_authenticate(user=self.passenger)
@@ -195,7 +200,7 @@ class TicketValidationStatusTestCase(TestCase):
             passenger_count=6,
             code='T600',
             issued_at=timezone.now(),
-            expires_at=timezone.now() + timedelta(hours=3),
+            expires_at=timezone.now() + timedelta(hours=12),
         )
 
         # 1. TicketSerializer verification
@@ -236,3 +241,89 @@ class TicketValidationStatusTestCase(TestCase):
         ).first()
         self.assertIsNotNone(audit_entry)
         self.assertEqual(audit_entry.metadata.get('passenger_count'), 6)
+
+    def test_newly_issued_ticket_has_12_hours_duration(self):
+        pay = Payment.objects.create(
+            trip=self.trip,
+            passenger=self.passenger,
+            fare=self.fare,
+            amount=Decimal('12.00'),
+            status=Payment.Status.SUCCEEDED,
+            paid_at=timezone.now(),
+            provider='mock',
+            provider_ref='MOCK-12H-PAY',
+            idempotency_key='test-12h-pay-key',
+            expires_at=timezone.now() + timedelta(minutes=10),
+        )
+        ticket = issue_ticket_for_payment(pay)
+        self.assertIsNotNone(ticket)
+        duration_seconds = (ticket.expires_at - ticket.issued_at).total_seconds()
+        self.assertAlmostEqual(duration_seconds, 12 * 3600, delta=5)
+
+    def test_rotating_code_endpoint_returns_12_hour_validity_and_expires_at(self):
+        self.client.force_authenticate(user=self.passenger)
+        code_resp = self.client.get(f'/api/tickets/{self.ticket.id}/code/')
+        self.assertEqual(code_resp.status_code, status.HTTP_200_OK)
+        code_data = code_resp.json()
+        self.assertAlmostEqual(code_data['valid_for_seconds'], 43200, delta=10)
+        self.assertEqual(
+            code_data['expires_at'],
+            self.ticket.expires_at.isoformat().replace('+00:00', 'Z'),
+        )
+        self.assertIsNotNone(code_data['token'])
+        self.assertEqual(code_data['token'], code_data['rotating_token'])
+
+    def test_scan_qr_token_transitions_status_to_used_and_second_scan_fails(self):
+        serializer = TicketSerializer(self.ticket)
+        qr_token = serializer.data['qr_token']
+        self.assertIsNotNone(qr_token)
+        self.assertEqual(serializer.data['status'], 'valid')
+
+        # First scan
+        self.client.force_authenticate(user=self.casher)
+        scan1 = self.client.post(
+            '/api/tickets/validate/',
+            {'token': qr_token},
+            format='json',
+        )
+        self.assertEqual(scan1.status_code, status.HTTP_200_OK)
+        self.assertEqual(scan1.json()['result'], 'valid')
+        self.assertEqual(scan1.json()['detail'], 'Ticket is valid.')
+
+        # Immediately ticket status is 'used'
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.get_computed_status(), 'used')
+        updated_ser = TicketSerializer(self.ticket)
+        self.assertEqual(updated_ser.data['status'], 'used')
+        self.assertIsNone(updated_ser.data['qr_token'])
+        self.assertIsNone(updated_ser.data['token'])
+
+        # Second scan rejected
+        scan2 = self.client.post(
+            '/api/tickets/validate/',
+            {'token': qr_token},
+            format='json',
+        )
+        self.assertEqual(scan2.status_code, status.HTTP_200_OK)
+        self.assertEqual(scan2.json()['result'], 'invalid')
+        self.assertEqual(scan2.json()['detail'], 'This ticket has already been used.')
+
+    def test_validate_using_short_ticket_code(self):
+        self.client.force_authenticate(user=self.casher)
+        scan1 = self.client.post(
+            '/api/tickets/validate/',
+            {'token': self.ticket.code},
+            format='json',
+        )
+        self.assertEqual(scan1.status_code, status.HTTP_200_OK)
+        self.assertEqual(scan1.json()['result'], 'valid')
+
+        # Second scan rejected
+        scan2 = self.client.post(
+            '/api/tickets/validate/',
+            {'token': self.ticket.code},
+            format='json',
+        )
+        self.assertEqual(scan2.status_code, status.HTTP_200_OK)
+        self.assertEqual(scan2.json()['result'], 'invalid')
+        self.assertIn('already been used', scan2.json()['detail'])

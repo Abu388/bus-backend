@@ -93,7 +93,7 @@ class TicketRotatingCodeView(APIView):
 
     @extend_schema(
         tags=['Tickets'],
-        summary='Get a fresh 60-second rotating signed code for casher scanning',
+        summary='Get a fresh 12-hour signed code for casher scanning',
         responses={200: OpenApiTypes.OBJECT},
     )
     def get(self, request, pk):
@@ -164,7 +164,7 @@ class TicketValidateView(APIView):
             casher=request.user, status=Trip.Status.ACTIVE
         ).first()
 
-        # 1. Verify the rotating signed code
+        # 1. Verify the rotating signed code (up to 12 hours) or short ticket code / UUID
         ticket_id = verify_rotating_ticket_token(raw_token)
         ticket = None
         if ticket_id:
@@ -173,6 +173,23 @@ class TicketValidateView(APIView):
                 .filter(id=ticket_id)
                 .first()
             )
+        if not ticket:
+            ticket = (
+                Ticket.objects.select_related('payment', 'trip', 'passenger')
+                .filter(code__iexact=raw_token)
+                .first()
+            )
+        if not ticket:
+            try:
+                import uuid
+                ticket_uuid = uuid.UUID(raw_token)
+                ticket = (
+                    Ticket.objects.select_related('payment', 'trip', 'passenger')
+                    .filter(id=ticket_uuid)
+                    .first()
+                )
+            except (ValueError, AttributeError):
+                pass
 
         # 2. Check in strict order:
         #    (a) Code is genuine & unexpired AND ticket exists -> else 'invalid'

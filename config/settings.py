@@ -195,7 +195,7 @@ SPECTACULAR_SETTINGS = {
 PAYMENT_PROVIDER = env.str("PAYMENT_PROVIDER", default="mock")
 PAYMENT_WEBHOOK_SECRET = env.str("PAYMENT_WEBHOOK_SECRET", default="dev-webhook-secret-key")
 ENABLE_PAYMENT_SIMULATOR = env.bool("ENABLE_PAYMENT_SIMULATOR", default=True)
-TICKET_MAX_DURATION_HOURS = env.int("TICKET_MAX_DURATION_HOURS", default=3)
+TICKET_MAX_DURATION_HOURS = env.int("TICKET_MAX_DURATION_HOURS", default=12)
 
 
 # Production HTTPS Security Headers (Automatically active when DJANGO_DEBUG=False on Render)
